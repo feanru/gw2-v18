@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/img/favicon.ico" sizes="16x16" type="image/x-icon">
+  <title>Mi Cuenta – Perfil Guild Wars 2</title>
+  <link rel="stylesheet" href="css/global-gw.css">
+  <link rel="stylesheet" href="css/cuenta.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+  <header>
+    <!-- El menú de navegación se insertará aquí automáticamente -->
+  </header>
+
+  <div class="container-seccion">
+    <div id="account-skeleton" class="account-skeleton">
+      <div class="account-skeleton-header">
+        <div class="skeleton skeleton-avatar account-skeleton-avatar"></div>
+        <div class="skeleton skeleton-line account-skeleton-name"></div>
+      </div>
+      <ul class="account-skeleton-items">
+        <li class="skeleton skeleton-line account-skeleton-item"></li>
+        <li class="skeleton skeleton-line account-skeleton-item"></li>
+        <li class="skeleton skeleton-line account-skeleton-item"></li>
+      </ul>
+    </div>
+
+    <main style="display:none">
+      <!-- Sección de bienvenida -->
+      <section class="videos-board-section welcome-section">
+        <div class="welcome-content">
+          <div class="welcome-text">
+            <h1 class="videos-board-topic">Hola, <span id="userName">Usuario</span></h1>
+            <p class="welcome-subtitle">Bienvenido a tu panel de control</p>
+            <div class="welcome-stats">
+              <div class="stat-item">
+                <i class="fas fa-star"></i>
+                <span id="favoritosCount">0</span> ítems guardados
+              </div>
+              <div class="stat-item">
+                <i class="fas fa-exchange-alt"></i>
+                <span id="comparacionesCount">0</span> comparaciones
+              </div>
+            </div>
+          </div>
+          <div class="welcome-illustration">
+            <img src="img/account-illustration.svg" alt="Ilustración de cuenta" onerror="this.onerror=null;this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMDAgMjAwIiBmaWxsPSJub25lIj4KICA8Y2lyY2xlIGN4PSIxMDAiIGN5PSIxMDAiIHI9Ijg1IiBzdHJva2U9IiM5M2Y5ZTEiIHN0cm9rZS13aWR0aD0iMyIvPgogIDxwYXRoIGQ9Ik0xMDAgNTBjMjcuNiAwIDUwIDIyLjQgNTAgNTBzLTIyLjQgNTAtNTAgNTBTNTAgMTI3LjYgNTAgMTAwczIyLjQtNTAgNTAtNTB6IiBmaWxsPSJub25lIiBzdHJva2U9IiM5M2Y5ZTEiIHN0cm9rZS13aWR0aD0iMyIvPgogIDxwYXRoIGQ9Ik0xMDAgNTBjMTYuNSAwIDMwIDEzLjUgMzAgMzBzLTEzLjUgMzAtMzAgMzAtMzAtMTMuNS0zMC0zMFM4My41IDUwIDEwMCA1MHoiIGZpbGw9IiM5M2Y5ZTEiIGZpbGwtb3BhY2l0eT0iMC4yIi8+CiAgPGNpcmNsZSBjeD0iODUiIGN5PSI4MCIgcj0iNSIgZmlsbD0iIzkzZjllMSIvPgogIDxjaXJjbGUgY3g9IjExNSIgY3k9IjgwIiByPSI1IiBmaWxsPSIjOTNmOWUxIi8+Cjwvc3ZnPg==';this.alt='Ilustración de cuenta (genérica)';">
+          </div>
+        </div>
+      </section>
+
+      <!-- Sección de ítems guardados -->
+      <section class="videos-board-section">
+        <div class="section-header">
+          <h2 class="videos-board-topic">
+            <i class="fas fa-star"></i> Tus ítems guardados
+          </h2>
+          <div class="section-actions">
+            <button id="refreshFavoritos" class="btn-refresh" title="Actualizar lista">
+              <i class="fas fa-sync-alt"></i>
+            </button>
+          </div>
+        </div>
+        <div id="favoritos-items-container" class="items-container"></div>
+      </section>
+
+      <!-- Sección de comparaciones (próximamente) -->
+      <section class="videos-board-section">
+        <div class="section-header">
+          <h2 class="videos-board-topic">
+            <i class="fas fa-exchange-alt"></i> Tús comparaciones
+          </h2>
+          <div class="section-actions">
+            <button id="refreshComparativas" class="btn-refresh" title="Actualizar lista de comparaciones">
+              <i class="fas fa-sync-alt"></i>
+            </button>
+          </div>
+        </div>
+        <div id="lista-comparaciones" class="items-container">
+          <div class="coming-soon-content">
+            <i class="fas fa-tools"></i>
+            <h3>En desarrollo</h3>
+            <p>Pronto podrás guardar y administrar tus comparaciones de artículos aquí.</p>
+            <button class="btn-primary mt-3" disabled>Próximamente</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/runtime-env.js"></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-auth-nav.min.js"></script>
+  <script>
+    // Inicializar autenticación cuando el DOM esté listo
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.Auth && typeof window.Auth.initAuth === 'function') {
+        window.Auth.initAuth();
+      }
+    });
+  </script>
+  
+  <script type="module" src="/dist/0.14.69/js/storageUtils.min.js"></script>
+  <script type="module" src="/dist/0.14.69/js/cuenta.min.js"></script>
+  <script type="module" src="/dist/0.14.69/js/sw-register.min.js"></script>
+</body>
+</html>

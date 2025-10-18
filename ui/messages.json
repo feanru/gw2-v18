@@ -1,0 +1,6 @@
+{
+  "fresh": "Datos al día",
+  "stale": "Mostrando el último dato disponible de {time} — Actualizando…",
+  "errorNotFound": "No encontramos este elemento.",
+  "errorGeneric": "No pudimos actualizar ahora. Mostramos el último dato válido."
+}

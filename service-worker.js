@@ -1,0 +1,250 @@
+// Placeholder replaced during build with the current version hash
+const APP_VERSION = '__APP_VERSION__';
+const CACHE_VERSION = 3;
+const STATIC_CACHE = `static-${APP_VERSION}-v${CACHE_VERSION}`;
+const API_CACHE = `api-${APP_VERSION}-v${CACHE_VERSION}`;
+const DEFAULT_TTL = 5 * 60 * 1000; // 5 minutes
+// Background videos served with fixed names
+const VIDEO_ASSETS = [
+  'img/Secuencia01.mp4',
+  'img/Secuencia02.mp4',
+  'img/Secuencia03.mp4',
+];
+const VERSIONED_DIST_REGEX = /^\d+\.\d+\.\d+$/;
+const WORKER_PATH_REGEX = /^\/dist\/\d+\.\d+\.\d+\/js\/workers\//;
+
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  event.waitUntil(
+    caches.open(STATIC_CACHE).then((cache) => cache.addAll(VIDEO_ASSETS))
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    (async () => {
+      const expectedCaches = [STATIC_CACHE, API_CACHE];
+      let hadOldCaches = false;
+      await Promise.all([
+        caches.keys().then((keys) =>
+          Promise.all(
+            keys
+              .filter(
+                (k) => /^(static|api)-/.test(k) && !expectedCaches.includes(k)
+              )
+              .map((k) => {
+                hadOldCaches = true;
+                return caches.delete(k);
+              })
+          )
+        ),
+        cleanExpired(),
+        purgeWorkerEntries(STATIC_CACHE),
+      ]);
+      await self.clients.claim();
+      if (hadOldCaches) {
+        const clientList = await self.clients.matchAll({ type: 'window' });
+        clientList.forEach((c) => c.postMessage({ type: 'reload' }));
+      }
+    })()
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+
+  if (VIDEO_ASSETS.some((asset) => url.pathname === '/' + asset)) {
+    event.respondWith(cacheFirst(request, STATIC_CACHE));
+    return;
+  }
+
+  if (WORKER_PATH_REGEX.test(url.pathname)) {
+    event.respondWith(fetch(request, { cache: 'no-store' }));
+    return;
+  }
+
+  if (isVersionedDistAsset(url.pathname, 'js') || url.pathname.startsWith('/css/')) {
+    event.respondWith(cacheFirst(request, STATIC_CACHE));
+    return;
+  }
+
+  if (['/backend/api/user.php', '/backend/api/favorites.php', '/backend/api/comparisons.php'].includes(url.pathname)) {
+    event.respondWith(fetch(request, { cache: 'no-store' }));
+    return;
+  }
+
+  if (
+    url.pathname.startsWith('/backend/api/') &&
+    !['/backend/api/user.php', '/backend/api/favorites.php', '/backend/api/comparisons.php'].includes(url.pathname)
+  ) {
+    event.respondWith(
+      (async () => {
+        const { response, fetchPromise } = await staleWhileRevalidate(request, API_CACHE);
+        event.waitUntil(
+          (async () => {
+            if (fetchPromise) await fetchPromise;
+            await cleanExpired();
+          })()
+        );
+        return response;
+      })()
+    );
+  }
+});
+
+self.addEventListener('message', (event) => {
+  const { data } = event;
+  if (!data) return;
+  if (data.type === 'clean') {
+    event.waitUntil(cleanExpired());
+  } else if (data.type === 'invalidate' && data.url) {
+    event.waitUntil(caches.open(API_CACHE).then((c) => c.delete(data.url)));
+  } else if (data.type === 'invalidateItem' && data.id != null) {
+    event.waitUntil(invalidateItem(data.id));
+  } else if (data.type === 'invalidateAll') {
+    event.waitUntil(caches.delete(API_CACHE));
+  }
+});
+
+async function cacheFirst(req, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(req);
+  if (cached) {
+    return cached;
+  }
+  const res = await fetch(req);
+  if (res.ok && res.status === 200) {
+    const type = res.headers.get('Content-Type') || '';
+    const isJs =
+      req.destination === 'script' || new URL(req.url).pathname.endsWith('.js');
+    if (!isJs || type.includes('javascript')) {
+      cache.put(req, res.clone());
+    }
+  }
+  return res;
+}
+
+function getTTLFromResponse(res) {
+  const cc = res.headers.get('Cache-Control') || '';
+  const maxAgeMatch = cc.match(/max-age=(\d+)/);
+  if (maxAgeMatch) return parseInt(maxAgeMatch[1], 10) * 1000;
+  const custom = res.headers.get('X-Cache-Ttl');
+  if (custom) return parseInt(custom, 10) * 1000;
+  return DEFAULT_TTL;
+}
+
+async function staleWhileRevalidate(req, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(req);
+  const now = Date.now();
+
+  const fetchAndUpdate = async () => {
+    const netRes = await fetch(req);
+    if (netRes.ok) {
+      const ttl = getTTLFromResponse(netRes);
+      const headers = new Headers(netRes.headers);
+      if (ttl) {
+        headers.set('X-Cache-Expires', Date.now() + ttl);
+      }
+      const body = await netRes.clone().blob();
+      const res = new Response(body, {
+        status: netRes.status,
+        statusText: netRes.statusText,
+        headers,
+      });
+      // Clone the response for caching and return a separate clone to the client
+      await cache.put(req, res.clone());
+      return res.clone();
+    }
+    return netRes;
+  };
+
+  if (cached) {
+    const exp = parseInt(cached.headers.get('X-Cache-Expires') || '0', 10);
+    if (exp && now < exp) {
+      return { response: cached, fetchPromise: null };
+    }
+    return { response: cached, fetchPromise: fetchAndUpdate() };
+  }
+
+  const fetchPromise = fetchAndUpdate();
+  return { response: fetchPromise, fetchPromise: null };
+}
+
+async function cleanExpired() {
+  const cache = await caches.open(API_CACHE);
+  const keys = await cache.keys();
+  const now = Date.now();
+  await Promise.all(
+    keys.map(async (req) => {
+      const res = await cache.match(req);
+      if (!res) {
+        return;
+      }
+      const exp = parseInt(res.headers.get('X-Cache-Expires') || '0', 10);
+      if (exp && now > exp) {
+        await cache.delete(req);
+        return;
+      }
+      if (!exp) {
+        const dateHeader = res.headers.get('Date');
+        const created = dateHeader ? new Date(dateHeader).getTime() : 0;
+        if (created && now - created > DEFAULT_TTL) {
+          await cache.delete(req);
+        }
+      }
+    })
+  );
+}
+
+async function invalidateItem(id) {
+  const cache = await caches.open(API_CACHE);
+  const keys = await cache.keys();
+  await Promise.all(
+    keys.map((req) => {
+      const url = new URL(req.url);
+      if (
+        url.searchParams.get('itemId') === String(id) ||
+        url.pathname.endsWith(`/items/${id}`) ||
+        url.searchParams.get('output') === String(id)
+      ) {
+        return cache.delete(req);
+      }
+      return null;
+    })
+  );
+}
+
+async function purgeWorkerEntries(cacheName) {
+  const cache = await caches.open(cacheName);
+  const keys = await cache.keys();
+  await Promise.all(
+    keys.map(async (req) => {
+      try {
+        const url = new URL(req.url);
+        if (WORKER_PATH_REGEX.test(url.pathname)) {
+          await cache.delete(req);
+        }
+      } catch (err) {
+        // Ignore malformed URLs
+      }
+    })
+  );
+}
+
+function isVersionedDistAsset(pathname, typeSegment) {
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments.length < 3) {
+    return false;
+  }
+  const [root, version, type] = segments;
+  if (root !== 'dist' || !VERSIONED_DIST_REGEX.test(version)) {
+    return false;
+  }
+  if (typeSegment) {
+    return type === typeSegment;
+  }
+  return true;
+}

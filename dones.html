@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/img/favicon.ico" sizes="16x16" type="image/x-icon">
+  <title>Dones para Legendarias: Guía de Fabricación GW2</title>
+  <link rel="stylesheet" href="css/global-gw.css">
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+  <header>
+    <!-- El menú de navegación se insertará aquí automáticamente -->
+  </header>
+
+  <div class="tabs">
+    <button class="tab-button active" data-tab="tab-don-suerte">Don de la Suerte</button>
+    <button class="tab-button" data-tab="tab-tributo-mistico">Tributo Místico</button>
+    <button class="tab-button" data-tab="tab-tributo-draconico">Tributo Dracónico</button>
+    <button class="tab-button" data-tab="dones-1ra-gen">Dones 1ra Gen</button>
+  </div>
+
+  <!-- Contenedor para Don de la Suerte -->
+  <div id="tab-don-suerte" class="container container-don tab-content active">
+    <div class="container-header">
+      <div>
+        <h2>Don de la Suerte</h2>
+        <p>Un don de la suerte que se utiliza para crear armas legendarias. De primera generación.</p>
+      </div>
+    </div>
+    <main>
+      
+      <div id="error-message" class="error-message" style="display:none;"></div>
+      <div id="dones-content"></div>
+      <div id="dones-skeleton" class="hidden">
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Contenedor para Tributo Místico -->
+  <div id="tab-tributo-mistico" class="container container-tributo tab-content">
+    <div class="container-header">
+      <div>
+        <h2>Tributo Místico</h2>
+        <p>El tributo místico es un don que se usa para fabricar armas legendarias de segunda generación.</p>
+      </div>
+    </div>
+    <main>
+      
+      <div id="tributo-content"></div>
+      <div id="tributo-skeleton" class="hidden">
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Contenedor para Tributo Dracónico -->
+  <div id="tab-tributo-draconico" class="container container-tributo tab-content">
+    <div class="container-header">
+      <div>
+        <h2>Tributo Dracónico</h2>
+        <p>El tributo dracónico es un don que se usa para fabricar armas legendarias de tercera generación.</p>
+      </div>
+    </div>
+    <main>
+      
+      <div id="tributo-draconico-content"></div>
+      <div id="tributo-draconico-skeleton" class="hidden">
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Contenedor para Dones 1ra Gen -->
+  <div id="dones-1ra-gen" class="container container-don tab-content">
+    <div class="container-header">
+      <div>
+        <h2>Dones 1ra Gen</h2>
+        <p>Información sobre dones de primera generación.</p>
+      </div>
+    </div>
+    <main>
+      
+      <div id="dones-1ra-gen-content"></div>
+      <div id="dones-1ra-gen-skeleton" class="hidden">
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/runtime-env.js"></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-utils-1.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-dones.min.js" defer></script>
+  <!-- Consulta dist/manifest.json para obtener el hash actual; se regenera en cada compilación -->
+  <script type="module" src="/dist/0.14.69/js/bundle-legendary.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/dones.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-auth-nav.min.js" defer></script>
+  <script>
+    // Inicializar autenticación cuando el DOM esté listo
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.Auth && typeof window.Auth.initAuth === 'function') {
+        window.Auth.initAuth();
+      }
+    });
+  </script>
+  
+  <script type="module">
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        await import('/dist/0.14.69/js/feedback-modal.min.js');
+        await import('/dist/0.14.69/js/sw-register.min.js');
+      } catch (e) {
+        console.error('Error loading optional modules', e);
+      }
+    });
+  </script>
+</body>
+</html>

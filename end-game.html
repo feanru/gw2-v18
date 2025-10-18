@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/img/favicon.ico" sizes="16x16" type="image/x-icon">
+  <title>Guías End-Game: Raids, Fractales y Más – GW2</title>
+  <link rel="stylesheet" href="css/global-gw.css">
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+  <header>
+    <!-- El menú de navegación se insertará aquí automáticamente -->
+  </header>
+  <div class="container-seccion">
+    <div class="tabs">
+      <button class="tab-button active" data-tab="fractales">Fractales</button>
+      <button class="tab-button" data-tab="strikes">Strikes</button>
+      <button class="tab-button" data-tab="raids">Raids</button>
+    </div>
+    
+    <main>
+      <!-- Pestaña de Fractales -->
+      <section id="fractales" class="tab-content active">
+        <h2 class="videos-board-topic">Guías de Fractales</h2>
+        <br>
+        <div class="videos-grid-seccion">
+          <div class="video-container">
+            <iframe src="https://www.youtube.com/embed/v_eYnH6Mi4k" title="fractal pico de sunqua" frameborder="0" allowfullscreen loading="lazy"></iframe>
+          </div>
+          <div class="video-container">
+            <p>Más guías de fractales próximamente...</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pestaña de Strikes -->
+      <section id="strikes" class="tab-content">
+        <h2 class="videos-board-topic">Guías de Strikes</h2>
+        <br>
+        <div class="videos-grid-seccion">
+          <div class="video-container">
+            <p>Próximamente: Guías detalladas de Strikes</p>
+          </div>
+          <div class="video-container">
+            <p>Estamos trabajando en contenido de calidad para ti</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pestaña de Raids -->
+      <section id="raids" class="tab-content">
+        <h2 class="videos-board-topic">Guías de Raids</h2>
+        <br>
+        <div class="videos-grid-seccion">
+          <div class="video-container">
+            <p>Próximamente: Guías completas de Raids</p>
+          </div>
+          <div class="video-container">
+            <p>Contenido en desarrollo, ¡vuelve pronto!</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  
+  
+  <script>
+    // Tabs functionality
+    document.addEventListener('DOMContentLoaded', function() {
+      const tabButtons = document.querySelectorAll('.tab-button');
+      const tabContents = document.querySelectorAll('.tab-content');
+      
+      tabButtons.forEach(button => {
+        button.addEventListener('click', () => {
+          // Remove active class from all buttons and contents
+          tabButtons.forEach(btn => btn.classList.remove('active'));
+          tabContents.forEach(content => content.classList.remove('active'));
+          
+          // Add active class to clicked button and corresponding content
+          button.classList.add('active');
+          const tabId = button.getAttribute('data-tab');
+          document.getElementById(tabId).classList.add('active');
+        });
+      });
+    });
+  </script>
+  <script src="/runtime-env.js"></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-auth-nav.min.js"></script>
+  <script>
+    // Inicializar autenticación cuando el DOM esté listo
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.Auth && typeof window.Auth.initAuth === 'function') {
+        window.Auth.initAuth();
+      }
+    });
+  </script>
+  
+  <script type="module" src="/dist/0.14.69/js/feedback-modal.min.js"></script>
+  <script type="module" src="/dist/0.14.69/js/sw-register.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/img/favicon.ico" sizes="16x16" type="image/x-icon">
+  <title>Crafteo de Alforjas de 32 Casillas – GW2</title>
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="css/leg-css.css">
+  <link rel="stylesheet" href="css/global-gw.css">
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-1YJ4M39JP3');
+  </script>
+</head>
+<body>
+  <header>
+    <!-- El menú de navegación se insertará aquí automáticamente -->
+  </header>
+
+  <main>
+    <div class="container-first">
+      <div class="container-header">
+        <div style="text-align: center;margin-bottom: 25px;">
+          <h2>Alforjas y Contenedores de 32 Casillas</h2>
+          <p>Visualizador de componentes y costos de crafteo</p>
+        </div>
+        <nav class="bag-navigation">
+          <div class="legendary-selectors-grid bag-nav-grid">
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button active" data-parent-key="ALFORJA_GASA" data-item-id="83995">Alforja de gasa</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="TALEGA_MENSAJERO" data-item-id="85370">Talega de mensajero</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="TALEGA_MARISCAL" data-item-id="85372">Talega de mariscal</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="TALEGA_HAMASEEN" data-item-id="83109">Talega de hamaseen</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="TALEGA_CUERO_ENDURECIDO" data-item-id="83182">Talega de cuero endurecido</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="ARMARIO_ORICALCO" data-item-id="85371">Armario de oricalco</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="ARMARIO_NOMADA" data-item-id="83286">Armario de nómada</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="ARMARIO_MENSAJERO" data-item-id="82277">Armario de mensajero</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="ARMARIO_MARISCAL" data-item-id="83205">Armario de mariscal</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="ARMARIO_LIGA_CAURI" data-item-id="83186">Armario de Liga Cauri</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="ALFORJA_MENSAJERO" data-item-id="83435">Alforja de mensajero</button>
+            <button type="button" class="item-tab-btn-treeleg bag-nav-button" data-parent-key="ALFORJA_MARISCAL" data-item-id="83435">Alforja de mariscal</button>
+          </div>
+        </nav>
+      </div>
+      <div class="crafting-container-bag">
+        <div class="bag-variant-controls hidden" id="bagVariantControls">
+          <label for="bagVariantSelect">Variante de 20 casillas:</label>
+          <select id="bagVariantSelect" aria-label="Variante de 20 casillas"></select>
+        </div>
+        <div class="crafting-main-bag">
+          <div class="crafting-tree-wrapper">
+            <div id="craftingTree" class="crafting-tree"></div>
+            <div id="craftingTreeSkeleton" class="skeleton-tree hidden">
+              <div class="skeleton skeleton-result-line"></div>
+              <div class="skeleton skeleton-result-line"></div>
+              <div class="skeleton skeleton-result-line"></div>
+              <div class="skeleton skeleton-result-line"></div>
+              <div class="skeleton skeleton-result-line"></div>
+            </div>
+          </div>
+          <div id="summary" class="crafting-summary" style="display: none;">
+            <h3>Resumen de Costos</h3>
+            <div class="summary-item" id="summaryBuy">
+              <span>Precio de compra (crafteo)</span>
+              <span id="summaryBuyPrice">-</span>
+            </div>
+            <div class="summary-item" id="summarySell">
+              <span>Precio de venta (crafteo)</span>
+              <span id="summarySellPrice">-</span>
+            </div>
+            <div class="summary-note">
+              Nota: Los precios están basados en los costos de crafteo de los ingredientes según su forma de compra.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/dist/0.14.69/js/recipeService.standalone.min.js"></script>
+  <script>
+    if (
+      typeof window !== 'undefined' &&
+      (!window.RecipeService || typeof window.RecipeService.getItemBundles !== 'function')
+    ) {
+      console.error('Servicios de recetas no disponibles: window.RecipeService.getItemBundles no está definido.');
+    }
+  </script>
+  <script src="/runtime-env.js"></script>
+  <script type="module" src="/dist/0.14.69/js/services.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-utils-1.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-auth-nav.min.js" defer></script>
+  <!-- Consulta dist/manifest.json para obtener el hash actual; se regenera en cada compilación -->
+  <script type="module" src="/dist/0.14.69/js/bundle-bags.min.js" defer></script>
+  <script>
+    // Inicializar autenticación cuando el DOM esté listo
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.Auth && typeof window.Auth.initAuth === 'function') {
+        window.Auth.initAuth();
+      }
+    });
+  </script>
+
+  <script type="module" src="/dist/0.14.69/js/feedback-modal.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/sw-register.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/img/favicon.ico" sizes="16x16" type="image/x-icon">
+  <title>Fractales estadísticas para Ganar Oro – Guía GW2</title>
+  <link rel="stylesheet" href="css/global-gw.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+  <header>
+    <!-- El menú de navegación se insertará aquí automáticamente -->
+  </header>
+  <div class="tabs">
+    <button class="tab-button active" data-tab="tab-promedios">Promedios</button>
+    <button class="tab-button" data-tab="tab-precios">Precios y Materiales</button>
+    <button class="tab-button" data-tab="tab-resumen">Resumen y Profit</button>
+    <button class="tab-button" data-tab="tab-extras">Extras</button>
+  </div>
+  <div class="container">
+    <main>
+      <div id="tab-promedios" class="tab-content active">
+        <div style="text-align: center;margin-bottom: 25px;">
+          <h2>Promedios por STACK de encriptaciones fractales</h2>
+          <p>Promedio de materiales obtenidos por apertura de un stack de encriptaciones fractales</p>
+        </div>
+        
+        <div class="card">
+          <table class="table-modern" id="tabla-fractales-gold">
+            
+            <tbody id="tabla-promedios"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="tab-precios" class="tab-content" style="display:none;">
+        <div class="card" style="margin-top:32px;">
+          <div style="text-align: center;margin-bottom: 25px;">
+            <h2>Precios unitarios de Materiales</h2>
+            <p>Promedio de ORO por materiales obtenidos por apertura de un stack de encriptaciones fractales</p>
+          </div>
+          <div id="tabla-precios-fractales"></div>
+        </div>
+      </div>
+      <div id="tab-resumen" class="tab-content" style="display:none;">
+        <div class="card" style="margin-top:32px;">
+          <div style="text-align: center;margin-bottom: 25px;">
+            <h2>Resumen total (Oro crudo + materiales)</h2>
+            <p>Oro promedio por apertura de un stack de encriptaciones fractales</p>
+          </div>
+          <div id="tabla-resumen-oro"></div>
+          <div style="text-align: center;margin-bottom: 25px;">
+            <p>Oro promedio por encriptación fractal</p>
+          </div>
+          <div id="tabla-resumen-oro-individual" style="margin-top:12px;"></div>
+        </div>
+        <div class="card" style="margin-top:32px;">
+          <div style="text-align: center;margin-bottom: 25px;">
+            <h2>Contribución de oro por material</h2>
+          </div>
+          <canvas id="contribuciones-chart" height="120"></canvas>
+        </div>
+        <div class="card" style="margin-top:32px;">
+          <div style="text-align: center;margin-bottom: 25px;">
+          <h2>Referencias para profit</h2>
+          <p>Valores de referencia para comparar el profit</p>
+          </div>
+          <p>Precio de referencia para saber si es mejor abrir o vender.</p>
+          <div id="tabla-referencias-profit">
+            <p>NOTA: Las matrices estabilizadoras fungen el papel de llaves, ya que se puede cambiar por llaves con el NPC de fractales. Y así obtener un valor por llave.
+              Y se toma como referencia para asignarle un valor a las llaves de encriptación. </p>
+          </div>
+          
+        </div>
+        <div class="card" style="margin-top:32px;">
+          <div style="text-align: center;margin-bottom: 25px;">
+            <h2>Abrir vs Vender Encriptaciones</h2>
+          </div>
+          <canvas id="abrir-vs-vender-chart" height="120"></canvas>
+        </div>
+      </div>
+      <!-- inicio EXTRAS -->
+      <div id="tab-extras" class="tab-content" style="display:none;">
+        <div class="card" style="margin-top:32px;">
+          <div style="text-align: center;margin-bottom: 25px;">
+            <h2>Extras</h2>
+          </div>
+          <p>Esta sección es información complementaria al Profit. También información interesante de obtención de otros materiales.</p>
+
+          <table class="table-modern">
+            <tbody>
+              <tr><th colspan="2"><div class="dato-item"><p>Por la apertura de un stack de encriptación fractal se obtiene.</p></div></th></tr>
+              <tr>
+                <td><div class="dato-item">Clave de encriptación fractal x stack</div></td>
+                <td><div class="dato-item-info">24.96</div></td>
+              </tr>
+              <tr>
+                <td><div class="dato-item">Matriz estabilizadora (venta - precio referencia)</div></td>
+                <td><div id="matriz-precio" class="dato-item-info">-</div></td>
+              </tr>
+              <tr>
+                <td><div class="dato-item">Conversión indirecta (clave de encriptación fractal)</div></td>
+                <td><div id="conversion-indirecta" class="dato-item-info" style="color:#16c198">-</div></td>
+              </tr>
+              <tr><td colspan="2"><div class="dato-item-info"><p>"Oro" extra que se podría añadir al Profit (no es oro real es una estimación basada si se compran claves con matrices estabilizadoras).<br> NOTA: Las claves de encriptación fractales se pueden comprar por matrices estabilizadoras (como referencia máxima de precio) lo que puede traducirse como oro indirecto.</p></div></td></tr>
+            </tbody>
+          </table>
+          
+          
+          
+          <table class="table-modern">
+            <tbody>
+              <tr><th colspan="2"><div class="dato-item"><p>Por la apertura de un stack de encriptación fractal se obtiene.</p></div></th></tr>
+              <tr>
+                <td><div class="dato-item">Puñado de reliquias fractales x stack</div></td>
+                <td><div class="dato-item-info">16.82</div></td>
+              </tr>
+              <tr>
+                <td><div class="dato-item">Abriendo "Puñado de reliquias fractales"</div></td>
+                <td><div class="dato-item-info">3 reliquias fractales</div></td>
+              </tr>
+              <tr>
+                <td><div class="dato-item">Reliquias fractales x stack de encriptación</div></td>
+                <td><div class="dato-item-info">50.46</div></td>
+              </tr>
+              <tr><td colspan="2"><div class="dato-item-info"><p>Con las reliquias puedes comprar el item "Diario del experimento de Dessa"<br> con el NPC de fractales COM-4373 y obtener esquirlas espirituales (moneda necesaria para craftear y/o convertir items).</p></div></td></tr>
+            </tbody>
+          </table>
+          
+          
+          <table class="table-modern">
+            <tbody>
+              <tr><th colspan="4"><div class="dato-item">
+                <p>Transformación de materiales t5 a t6 con el siguiente método.</p></div>
+              </th></tr>
+              <tr>
+                <td><div class="dato-item">Material t5 (sangre, veneno, hueso, escama, colmillo, garra)</div></td>
+                <td><div class="dato-item-info"> Cantidad 50</div></td>
+                <td><div class="dato-item">Material t6 (el equivalente al t5 pero en t6)</div></td>
+                <td><div class="dato-item-info"> Cantidad 1</div></td>
+              </tr>
+              
+              <tr>
+                <td><div class="dato-item">Montón de polvo cristalino (material t6)</div></td>
+                <td><div class="dato-item-info"> Cantidad 5</div></td>
+                <td><div class="dato-item">Piedra filosofal (comparado en la Forja Mística)</div></td>
+                <td><div class="dato-item-info"> Cantidad 5</div></td>
+              </tr>
+              <tr><td colspan="4"><div class="dato-item-info"><p>Ver sección de <a href="/forja-mistica" class="link-random">"Forja Mística".</a></p></div></td></tr>
+            </tbody>
+          </table>
+
+          <table class="table-modern"> 
+            <tbody>
+              <tr><th><div class="dato-item"><p>Infusión de +1 de Resistencia a la Agonía se puede transformar en infusiones de +2, +3, etc. Pueden dar más profit dependiendo de la elección.</p></div></th></tr>
+              <tr><td><div class="dato-item-info"><p>Ver sección de <a href="/compare-craft" class="link-random">"Comparativa de items"</a> y crear tabla comparativa.</p></div></td></tr>
+            </tbody>
+          </table>          
+        </div>
+      </div>
+        </div>
+<!-- fin EXTRAS -->
+    </main>
+  </div>
+  <script src="/runtime-env.js"></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-utils-1.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/tabs.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-fractales.min.js" defer></script>
+  <script>
+    // Usar las utilidades expuestas en window para evitar duplicar identificadores
+    document.addEventListener('DOMContentLoaded', async () => {
+      const ui = window.FractalesGoldUI;
+      const utils = window.FractalesUtils;
+
+      async function fetchPreciosFractales() {
+        const priceMap = await utils.fetchItemPrices([75919, 73248]);
+        const normalizedPriceMap = priceMap instanceof Map
+          ? priceMap
+          : new Map(Object.entries(priceMap ?? {}).map(([key, value]) => [Number(key), value]));
+
+        return {
+          compra75919: normalizedPriceMap.get(75919)?.buy_price || 0,
+          venta75919: normalizedPriceMap.get(75919)?.sell_price || 0,
+          compra73248: normalizedPriceMap.get(73248)?.buy_price || 0,
+          venta73248: normalizedPriceMap.get(73248)?.sell_price || 0
+        };
+      }
+
+      async function renderTodo() {
+        const preciosFractales = await fetchPreciosFractales();
+        await utils.fetchIconsFor(Object.values(ui.ICON_ID_MAP));
+        await ui.renderTablaPromedios();
+        await ui.renderTablaPrecios();
+
+        const resumenData = await ui.renderTablaResumenOro('tabla-resumen-oro', preciosFractales);
+        if (!resumenData || typeof resumenData !== 'object') {
+          const fallbackMessage = 'No se pudo cargar el resumen de oro. Intenta nuevamente más tarde.';
+          console.error('renderTodo: resumenData inválido', resumenData);
+          window.StorageUtils?.showToast?.(fallbackMessage, 'error');
+
+          const fallbackClass = 'fallback-message';
+          const textTargets = [
+            'tabla-resumen-oro',
+            'tabla-resumen-oro-individual',
+            'tabla-referencias-profit'
+          ];
+
+          textTargets.forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.innerHTML = '';
+            const messageEl = document.createElement('p');
+            messageEl.className = `dato-item-info ${fallbackClass}`;
+            messageEl.textContent = fallbackMessage;
+            el.appendChild(messageEl);
+          });
+
+          ['contribuciones-chart', 'abrir-vs-vender-chart'].forEach((id) => {
+            const chartEl = document.getElementById(id);
+            if (!chartEl) return;
+            chartEl.style.display = 'none';
+            const parent = chartEl.parentElement;
+            if (!parent || parent.querySelector(`.${fallbackClass}`)) return;
+            const messageEl = document.createElement('p');
+            messageEl.className = `dato-item-info ${fallbackClass}`;
+            messageEl.textContent = fallbackMessage;
+            parent.appendChild(messageEl);
+          });
+
+          return;
+        }
+
+        await ui.renderTablaResumenOroIndividual('tabla-resumen-oro-individual', preciosFractales, resumenData);
+        ui.renderGraficoContribuciones(resumenData.contribuciones);
+        ui.renderTablaReferenciasProfit('tabla-referencias-profit', preciosFractales, resumenData);
+        ui.renderGraficoAbrirVsVender('abrir-vs-vender-chart', preciosFractales, resumenData);
+        ui.renderExtras(preciosFractales, 24.96);
+      }
+
+      await renderTodo();
+    });
+  </script>
+  <script type="module" src="/dist/0.14.69/js/bundle-auth-nav.min.js" defer></script>
+  <script>
+    // Inicializar autenticación cuando el DOM esté listo
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.Auth && typeof window.Auth.initAuth === 'function') {
+        window.Auth.initAuth();
+      }
+    });
+  </script>
+  
+  <script type="module" src="/dist/0.14.69/js/feedback-modal.min.js" defer></script>
+  <script type="module" src="/dist/0.14.69/js/sw-register.min.js"></script>
+</body>
+</html>

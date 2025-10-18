@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesión - Guild Wars 2</title>
+    <link rel="stylesheet" href="css/global-gw.css">
+    <style>
+        .auth-container {
+            max-width: 400px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .login-btn {
+            background: #4285F4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            margin: 20px auto;
+        }
+        .login-btn img {
+            margin-right: 10px;
+        }
+    </style>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+    <div class="auth-container">
+        <h2>Iniciar Sesión</h2>
+        <div id="status">Procesando autenticación...</div>
+    </div>
+    <script>
+        window.onload = async function() {
+            try {
+                const resp = await fetch('backend/api/user.php');
+                if (resp.ok) {
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const redirect = urlParams.get('redirect') || '/cuenta';
+                    window.location.href = redirect;
+                } else {
+                    document.getElementById('status').textContent = 'No hay sesión activa.';
+                }
+            } catch (err) {
+                document.getElementById('status').textContent = 'Error al verificar la sesión.';
+            }
+        };
+    </script>
+  <script src="/runtime-env.js"></script>
+  <script type="module" src="/dist/0.14.69/js/sw-register.min.js"></script>
+</body>
+</html>

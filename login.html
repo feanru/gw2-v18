@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Iniciar Sesión – Guild Wars 2</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="css/global-gw.css">
+    <style>
+        .login-container {
+            max-width: 400px;
+            margin: 60px auto;
+            padding: 30px 20px;
+            background: #222;
+            border-radius: 10px;
+            text-align: center;
+            color: #fff;
+            box-shadow: 0 0 18px #0005;
+        }
+        .login-btn {
+            display: block;
+            width: 100%;
+            margin: 18px 0;
+            padding: 12px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .google { background: #4285F4; color: #fff; }
+        .google:hover { background: #3367d6; }
+        .discord { background: #5865F2; color: #fff; }
+        .discord:hover { background: #4752c4; }
+        .login-container h2 {
+            margin-bottom: 30px;
+        }
+        .login-container a {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 0.97em;
+        }
+        .login-container a:hover {
+            color: #fff;
+        }
+    </style>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+    <video autoplay loop muted playsinline id="bg-video" style="position:fixed;top:0;left:0;width:100vw;height:100vh;object-fit:cover;z-index:-1;filter:brightness(0.5) blur(0px);">
+             <source src="img/Secuencia01.mp4" type="video/mp4">
+      Tu navegador no soporta video HTML5.
+    </video>
+    <div class="login-container">
+        <h2>Iniciar sesión</h2>
+        <button class="login-btn google" onclick="window.Auth && window.Auth.loginWithGoogle()">
+            <img src="img/google-logo.svg" alt="Google" style="width:22px;vertical-align:middle;margin-right:10px;"> Iniciar sesión con Google
+        </button>
+        <button class="login-btn discord" onclick="window.Auth && window.Auth.loginWithDiscord()">
+            <img src="img/discord-logo.svg" alt="Discord" style="width:22px;vertical-align:middle;margin-right:10px;"> Iniciar sesión con Discord
+        </button>
+        <p style="margin:18px 0 0 0;font-size:0.97em;color:#bbb;">
+            Al iniciar sesión, aceptas nuestra <a href="/politica-privacidad" target="_blank">Política de Privacidad</a>.
+        </p>
+        <p style="margin-top:20px;"><a href="/">Volver al inicio</a></p>
+    </div>
+    <script src="/runtime-env.js"></script>
+    <script type="module" src="/dist/0.14.69/js/bundle-auth-nav.min.js"></script>
+    <script>
+      // Inicializar autenticación cuando el DOM esté listo
+      document.addEventListener('DOMContentLoaded', function() {
+        if (window.Auth && typeof window.Auth.initAuth === 'function') {
+          window.Auth.initAuth();
+        }
+      });
+    </script>
+  <script type="module" src="/dist/0.14.69/js/sw-register.min.js"></script>
+</body>
+</html>

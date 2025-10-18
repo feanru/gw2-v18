@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/img/favicon.ico" sizes="16x16" type="image/x-icon">
+  <title>Guías y Recursos de Guild Wars 2 en Español</title>
+  <link rel="stylesheet" href="css/global-gw.css">
+  <style>
+    /* Video de fondo y animación de carga */
+    #bg-video{
+      position:fixed;
+      top:0;
+      left:0;
+      width:100vw;
+      height:100vh;
+      object-fit:cover;
+      z-index:-1;
+      transition:filter 1s ease;
+    }
+    /* Oscurecido tras mostrar contenido */
+    #bg-video.dark{
+      filter:brightness(0.2);
+    }
+
+    /* Capa de atenuación sobre el video */
+    #bg-overlay{
+      position:fixed;
+      top:0;
+      left:0;
+      width:100vw;
+      height:100vh;
+      pointer-events:none;
+      z-index:-1; /* Encima del video pero debajo del contenido */
+      background:rgba(0,0,0,0.3); /* valor por defecto (dark) */
+      transition:background 0.6s ease;
+    }
+    /* Ocultar contenido al inicio */
+    .initial-hidden{
+      opacity:0;
+      visibility:hidden;
+      transition:opacity 0.8s ease;
+    }
+    /* Mostrar después de la animación */
+    .initial-hidden.show{
+      opacity:1;
+      visibility:visible;
+    }
+  </style>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+    <!-- Video de fondo -->
+    <video autoplay muted playsinline loop id="bg-video">
+      <source id="bg-source" src="" type="video/mp4">
+      Tu navegador no soporta video HTML5.
+    </video>
+    <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        const videoList = [
+          'img/Secuencia01.mp4',
+          'img/Secuencia02.mp4',
+          'img/Secuencia03.mp4'
+        ];
+        const videoEl = document.getElementById('bg-video');
+        if (videoEl) {
+          const randomSrc = videoList[Math.floor(Math.random() * videoList.length)];
+          console.log('Background video selected:', randomSrc);
+
+          // Asignar directamente al atributo src del elemento video
+          videoEl.setAttribute('src', randomSrc);
+          // Por compatibilidad, si existe un <source>, actualízalo también
+          const sourceEl = videoEl.querySelector('source');
+          if (sourceEl) sourceEl.setAttribute('src', randomSrc);
+
+          // Forzar la recarga y reproducción
+          videoEl.load();
+          videoEl.play().catch(() => {});
+        }
+      });
+    </script>
+    <!-- Overlay para atenuar video -->
+    <div id="bg-overlay"></div>
+  <header>
+    <!-- El menú de navegación se insertará aquí automáticamente -->
+  </header>
+
+  <section class="services-menu initial-hidden">
+    <div class="menu-title"></div>
+    <div class="menu-grid">
+      
+      <a href="#" class="menu-card-search" id="open-search-modal">
+        <div class="card-icon">
+          <img src="img/search.svg" alt="Buscador">
+        </div>
+        <div class="card-title">Buscador <br> Crafting </div>
+      </a>
+
+      <!-- Modal del Buscador -->
+      <div id="search-modal" class="search-modal" style="display:none;">
+        <div class="search-modal-backdrop"></div>
+        <div class="search-modal-content">
+          <button class="close-modal" id="close-search-modal"></button>
+          <input type="text" id="modal-search-input" placeholder="Buscar ítem por nombre..." autocomplete="off">
+          <ul id="modal-suggestions" class="suggestions"></ul>
+          <div id="modal-skeleton" class="hidden">
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+          </div>
+          <div id="modal-error-message" class="error-message" style="display:none;"></div>
+          <div id="modal-results" class="item-list"></div>
+        </div>
+      </div>
+      <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        const openBtn = document.getElementById('open-search-modal');
+        const modal = document.getElementById('search-modal');
+        const closeBtn = document.getElementById('close-search-modal');
+        let utilsPromise;
+
+        function loadUtils() {
+          if (!utilsPromise) {
+            utilsPromise = import('/dist/0.14.69/js/bundle-utils-1.min.js');
+          }
+          return utilsPromise;
+        }
+
+        openBtn.addEventListener('click', async function(e) {
+          e.preventDefault();
+          await loadUtils();
+          openSearchModal('/dist/0.14.69/js/search-modal.min.js');
+        });
+        const safeClose = async (...args) => {
+          await loadUtils();
+          return window.closeSearchModal(...args);
+        };
+        closeBtn.addEventListener('click', safeClose);
+        modal.querySelector('.search-modal-backdrop').addEventListener('click', safeClose);
+        document.addEventListener('keydown', async function(e) {
+          if (e.key === 'Escape') {
+            await safeClose();
+          }
+        });
+
+        if ('requestIdleCallback' in window) {
+          requestIdleCallback(loadUtils);
+        } else {
+          setTimeout(loadUtils, 2000);
+        }
+      });
+      </script>
+
+
+      <a href="/mundo-viviente-3" class="menu-card">
+        <div class="card-icon">
+          <img src="img/ls3.svg" alt="Logros LS3">
+        </div>
+        <div class="card-title">Logros <br> Mundo Viviente 3</div>
+      </a>
+
+      <a href="/mundo-viviente-4" class="menu-card">
+        <div class="card-icon">
+          <img src="img/ls4.svg" alt="Logros LS4">
+        </div>
+        <div class="card-title">Logros <br> Mundo Viviente 4</div>
+      </a>
+
+      <a href="/sangre-y-hielo" class="menu-card">
+        <div class="card-icon">
+          <img src="img/ls5.svg" alt="Logros LS5 - Sangre y Hielo">
+        </div>
+        <div class="card-title">Logros <br> Sangre y Hielo</div>
+      </a>
+
+      <a href="/end-of-dragons" class="menu-card">
+        <div class="card-icon">
+          <img src="img/eod.svg" alt="Logros End of Dragons">
+        </div>
+        <div class="card-title">Logros <br> End of Dragons</div>
+      </a>
+
+      <a href="/secrets-of-the-obscure" class="menu-card">
+        <div class="card-icon">
+          <img src="img/soto.svg" alt="Logros Secrets of the Obscure">
+        </div>
+        <div class="card-title">Logros <br>Secrets of the Obscure</div>
+      </a>
+
+      <a href="/janthir-wilds" class="menu-card">
+        <div class="card-icon">
+          <img src="img/janthir.svg" alt="Logros Janthir Wilds">
+        </div>
+        <div class="card-title">Logros <br>Janthir Wilds</div>
+      </a>      
+
+      <a href="/dominios" class="menu-card">
+        <div class="card-icon">
+          <img src="img/dominios.svg" alt="Guía DOMINIOS">
+        </div>
+        <div class="card-title">Puntos de Dominio</div>
+      </a>
+
+      <a href="/random" class="menu-card">
+        <div class="card-icon">
+          <img src="img/random.svg" alt="Guía random">
+        </div>
+        <div class="card-title">Guía random</div>
+      </a>
+
+      <a href="/lore" class="menu-card">
+        <div class="card-icon">
+          <img src="img/lore.svg" alt="LORE">
+        </div>
+        <div class="card-title">LORE</div>
+      </a>
+
+      <a href="/end-game" class="menu-card">
+        <div class="card-icon">
+          <img src="img/raid.svg" alt="Guías RAIDS">
+        </div>
+        <div class="card-title">Guías <br> End Game</div>
+      </a>
+
+      <a href="/builds" class="menu-card">
+        <div class="card-icon">
+          <img src="img/builds.svg" alt="Referencias Builds">
+        </div>
+        <div class="card-title">Referencias Builds</div>
+      </a>
+
+      <a href="/legendarios" class="menu-card-leg">
+        <div class="card-icon">
+          <img src="img/legendarios.svg" alt="Abolarios Legendarios">
+        </div>
+        <div class="card-title">Abolarios Legendarios</div>
+      </a>
+
+      <a href="/aurene" class="menu-card-leg">
+        <div class="card-icon">
+          <img src="img/aurene.svg" alt="Skins AURENE legendarias">
+        </div>
+        <div class="card-title">Aurene Legendarias <br> Skins</div>
+      </a>
+
+      <a href="/sellos-y-runas" class="menu-card-leg">
+        <div class="card-icon">
+          <img src="img/runa.svg" alt="Sellos y Runas Legendarias">
+        </div>
+        <div class="card-title">Sellos Legendarios</div>
+      </a>
+    </div>
+  </section>
+
+  <section class="videos-section initial-hidden" style="margin-top: 5%;">
+  <h2 class="videos-title">Videos recomendados</h2>
+  <div class="videos-grid" id="videos-grid">
+    <!-- Los videos se insertarán aquí por JS -->
+  </div>
+</section>
+
+  <footer class="main-footer initial-hidden" >
+    <div style="max-width: 900px; margin: 0 auto; padding: 0 16px; font-size: 10px;">
+      Este sitio utiliza datos e imágenes proporcionados por la API oficial de Guild Wars 2 de ArenaNet, Inc. y NCsoft Corporation y otras APIs no oficiales. Todos los nombres, iconos, logotipos e imágenes relacionados son propiedad de sus respectivos dueños. Este sitio no es oficial ni está afiliado con ArenaNet, NCsoft ni con sus socios. Todos los derechos reservados.
+    </div>
+  </footer>
+  <script>
+    // Lista de videos (puedes agregar más)
+    const videos = [
+      { id: "gbNWiarSkew", title: "Video 1" },
+      { id: "N129eyYYmoY", title: "Video 2" },
+      { id: "LJgVDv5J4Lg", title: "Video 3" },
+      { id: "vCKvZlRiJ7I", title: "Video 4" },
+      { id: "TjtkwBJOG-o", title: "Video 5" },
+      { id: "l3V-NE4yqHU", title: "Video 6" },
+      { id: "1U7-dozr56c", title: "Video 7" },
+      { id: "3yTEVGImwsc", title: "Video 8" },
+      { id: "4P5IRLUbPqs", title: "Video 9" },
+      { id: "OdsCwY66Eak", title: "Video 10" },
+      { id: "dJ5-vt-gGgY", title: "Video 11" },
+      { id: "RvxlQoYgeCE", title: "Video 12" }
+    ];
+
+    // Función para obtener N videos aleatorios sin repetir
+    function getRandomVideos(arr, n) {
+      const shuffled = arr.slice().sort(() => 0.5 - Math.random());
+      return shuffled.slice(0, n);
+    }
+
+    // Renderizar los videos
+    const selectedVideos = getRandomVideos(videos, 6); // Cambia 6 por la cantidad que quieras mostrar
+    const grid = document.getElementById("videos-grid");
+    selectedVideos.forEach(video => {
+      const div = document.createElement("div");
+      div.className = "video-container";
+      div.innerHTML = `
+        <iframe src="https://www.youtube.com/embed/${video.id}" title="${video.title}" frameborder="0" allowfullscreen loading="lazy"></iframe>
+      `;
+      grid.appendChild(div);
+    });
+  </script>
+  <script src="/runtime-env.js"></script>
+  <script type="module">
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        await import('/dist/0.14.69/js/bundle-auth-nav.min.js');
+        window.Auth?.initAuth?.();
+      } catch (e) {
+        console.error('Error loading auth module', e);
+      }
+    });
+  </script>
+  
+  <script>
+    // Mostrar contenido tras 4 segundos y oscurecer video
+    document.addEventListener('DOMContentLoaded', function(){
+      setTimeout(function(){
+        document.querySelectorAll('.initial-hidden').forEach(function(el){
+          el.classList.add('show');
+        });
+        const bg = document.getElementById('bg-video');
+        if(bg){ bg.classList.add('light'); }
+      }, 500);
+    });
+  </script>
+  <script type="module">
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        await import('/dist/0.14.69/js/sw-register.min.js');
+      } catch (e) {
+        console.error('SW registration failed', e);
+      }
+    });
+  </script>
+</body>
+</html>

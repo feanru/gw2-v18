@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="/img/favicon.ico" sizes="16x16" type="image/x-icon">
+  <title>Detalle de Ítem - GW2</title>
+  <link rel="stylesheet" href="css/global-gw.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1YJ4M39JP3"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1YJ4M39JP3');
+</script>
+</head>
+<body>
+  <header>
+    <!-- El menú de navegación se insertará aquí automáticamente -->
+  </header>
+
+  <section class="services-menu">
+    <div class="menu-grid-craft">
+      <a href="#" class="menu-card-search-craft" id="open-search-modal">
+        <div class="card-icon-craft">
+          <img src="img/search.svg" alt="Buscador">
+        </div>
+        <div class="card-title">Buscador</div>
+      </a>
+    </div>
+  </section>
+
+  
+    <div class="container-header">
+      <div id="item-header"></div>
+      <div id="wiki-links"></div>
+    </div>
+    <!-- Botones de navegación -->
+    <div class="tabs">
+      <button class="tab-button" data-tab="info-item">Crafteo</button>
+      <button class="tab-button" data-tab="resumen-mercado" data-requires-login="true">Resumen Mercado</button>
+      <button class="tab-button" data-tab="tab-mejores-horas-content" data-requires-login="true">Actividad Reciente</button>
+      <button class="tab-button" id="btn-guardar-item" data-requires-login="true">Guardar ítem</button>
+    </div>
+    
+    <div class="container">
+      <div id="freshness-banner" class="freshness-banner hidden"></div>
+      <div id="item-skeleton" class="hidden">
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+      </div>
+      <div id="info-item" class="tab-content active">
+        <div id="error-message" class="error-message" style="display:none;"></div>
+        <div id="seccion-totales"></div>
+        <div id="seccion-comparativa"></div>
+        <div id="seccion-crafting"></div>
+      </div>
+      <div id="resumen-mercado" class="tab-content" data-requires-login="true"></div>
+      <div id="tab-mejores-horas-content" class="tab-content" data-requires-login="true">
+        <div class="card">
+          <h3>Ventas y Compras por Hora</h3>
+          <canvas id="ventas-compras-chart" height="120"></canvas>
+          <h3 style="margin:18px 0 8px 0;font-weight:600;font-size:1.18rem;">Datos de las últimas 24 horas</h3>
+          <div id="hora-punta" class="highlight-info"></div>
+        </div>
+        <div class="card indicators" style="display:flex;flex-wrap:wrap;gap:18px;">
+          <div class="indicator" id="promedio-hora"></div>
+          <div class="indicator" id="promedio-dia"></div>
+        </div>
+      </div>
+    </div>
+
+      
+
+
+  <!-- Modal del Buscador fuera de .container para igualar a index.html -->
+      <div id="search-modal" class="search-modal" style="display:none;">
+        <div class="search-modal-backdrop"></div>
+        <div class="search-modal-content">
+          <button class="close-modal" id="close-search-modal"></button>
+          <input type="text" id="modal-search-input" placeholder="Buscar ítem por nombre..." autocomplete="off">
+          <ul id="modal-suggestions" class="suggestions"></ul>
+          <div id="modal-skeleton" class="hidden">
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+            <div class="skeleton skeleton-result-line"></div>
+          </div>
+          <div id="modal-error-message" class="error-message" style="display:none;"></div>
+          <div id="modal-results" class="item-list"></div>
+        </div>
+      </div>
+  <script src="/runtime-env.js"></script>
+  <script type="module" src="/dist/0.14.69/js/bundle-utils-1.min.js" defer></script>
+  <script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const openBtn = document.getElementById('open-search-modal');
+    const modal = document.getElementById('search-modal');
+    const closeBtn = document.getElementById('close-search-modal');
+    openBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      openSearchModal('/dist/0.14.69/js/search-modal.min.js');
+    });
+    closeBtn.addEventListener('click', closeSearchModal);
+    modal.querySelector('.search-modal-backdrop').addEventListener('click', closeSearchModal);
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') closeSearchModal();
+    });
+  });
+</script>
+
+<script type="module" src="/dist/0.14.69/js/bundle-auth-nav.min.js" defer></script>
+<script>
+  // Inicializar autenticación cuando el DOM esté listo
+  document.addEventListener('DOMContentLoaded', function() {
+    if (window.Auth && typeof window.Auth.initAuth === 'function') {
+      window.Auth.initAuth();
+    }
+  });
+</script>
+
+<script src="/dist/0.14.69/js/recipeService.standalone.min.js"></script>
+<script>
+  if (
+    typeof window !== 'undefined' &&
+    (!window.RecipeService || typeof window.RecipeService.getItemBundles !== 'function')
+  ) {
+    console.error('Servicios de recetas no disponibles: window.RecipeService.getItemBundles no está definido.');
+  }
+</script>
+<script type="module" src="/dist/0.14.69/js/services.min.js" defer></script>
+
+<script type="module" src="/dist/0.14.69/js/feedback-modal.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/tabs.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/utils/recipeUtils.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/item-mejores.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/itemHandlers.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/storageUtils.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/ui-helpers.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/item-ui.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/items-core.min.js" defer></script>
+<script type="module" src="/dist/0.14.69/js/item-loader.min.js" defer></script>
+  
+  <!-- Inicialización -->
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Verificar si hay un ID de ítem en la URL
+      const params = new URLSearchParams(window.location.search);
+      const itemId = parseInt(params.get('id'), 10);
+      
+      // Verificar funciones requeridas
+      const funcionesRequeridas = ['cargarMejoresHorasYMercado', 'StorageUtils'];
+      let todasDisponibles = true;
+      
+      funcionesRequeridas.forEach(func => {
+        if (!window[func]) {
+          todasDisponibles = false;
+        }
+      });
+      
+        // Si todo está bien, cargar los datos del ítem
+        if (todasDisponibles && itemId) {
+          window.cargarMejoresHorasYMercado(itemId);
+        }
+    });
+  </script>
+    <script type="module" src="/dist/0.14.69/js/sw-register.min.js"></script>
+</body>
+</html>
