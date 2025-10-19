@@ -3,6 +3,19 @@ document.addEventListener('DOMContentLoaded', () => {
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data?.type === 'reload') {
         alert('La página se actualizará para aplicar la nueva versión.');
+        return;
+      }
+      if (event.data?.type === 'cache-metrics') {
+        const metrics = {
+          ...(event.data.metrics || {}),
+        };
+        if (!Number.isFinite(metrics.lastUpdated)) {
+          metrics.lastUpdated = Date.now();
+        }
+        window.__cacheMetrics__ = metrics;
+        if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('cache-metrics', { detail: metrics }));
+        }
       }
     });
     navigator.serviceWorker

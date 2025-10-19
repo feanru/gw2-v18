@@ -13,12 +13,15 @@ const VIDEO_ASSETS = [
 const VERSIONED_DIST_REGEX = /^\d+\.\d+\.\d+$/;
 const WORKER_PATH_REGEX = /^\/dist\/\d+\.\d+\.\d+\/js\/workers\//;
 
-const cacheMetrics = { hit: 0, miss: 0, stale: 0 };
+const cacheMetrics = { hit: 0, miss: 0, stale: 0, lastUpdated: 0 };
 
 async function broadcastCacheMetrics() {
   try {
     const clients = await self.clients.matchAll({ type: 'window' });
-    const payload = { type: 'cache-metrics', metrics: { ...cacheMetrics } };
+    const payload = {
+      type: 'cache-metrics',
+      metrics: { ...cacheMetrics },
+    };
     clients.forEach((client) => {
       try {
         client.postMessage(payload);
@@ -36,6 +39,7 @@ function incrementCacheMetric(metric) {
     cacheMetrics[metric] = 0;
   }
   cacheMetrics[metric] += 1;
+  cacheMetrics.lastUpdated = Date.now();
   broadcastCacheMetrics();
 }
 
@@ -216,15 +220,22 @@ async function staleWhileRevalidate(req, cacheName) {
       }
       if (typeof policy.ttlMs === 'number') {
         headers.set('X-Cache-TtlMs', String(policy.ttlMs));
+        const ttlSeconds = Math.max(0, Math.round(policy.ttlMs / 1000));
+        headers.set('X-Snapshot-TTL', String(ttlSeconds));
       } else {
         headers.delete('X-Cache-TtlMs');
+        headers.delete('X-Snapshot-TTL');
       }
       if (policy.snapshotId) {
         headers.set('X-Cache-Snapshot-Id', policy.snapshotId);
+        headers.set('X-Snapshot-Id', policy.snapshotId);
       } else {
         headers.delete('X-Cache-Snapshot-Id');
+        headers.delete('X-Snapshot-Id');
       }
       headers.set('X-Cache-Stale', policy.stale ? '1' : '0');
+      headers.set('X-Snapshot-Stale', policy.stale ? '1' : '0');
+      headers.set('X-Snapshot-Updated', String(Date.now()));
       const body = await netRes.clone().blob();
       const res = new Response(body, {
         status: netRes.status,
@@ -240,7 +251,8 @@ async function staleWhileRevalidate(req, cacheName) {
 
   if (cached) {
     const exp = parseInt(cached.headers.get('X-Cache-Expires') || '0', 10);
-    const wasStale = cached.headers.get('X-Cache-Stale') === '1';
+    const wasStale =
+      cached.headers.get('X-Cache-Stale') === '1' || cached.headers.get('X-Snapshot-Stale') === '1';
     if (exp && now < exp && !wasStale) {
       incrementCacheMetric('hit');
       return { response: cached, fetchPromise: null };
@@ -249,6 +261,9 @@ async function staleWhileRevalidate(req, cacheName) {
     incrementCacheMetric('stale');
     const headers = new Headers(cached.headers);
     headers.set('X-Cache-Stale', '1');
+    headers.set('X-Snapshot-Stale', '1');
+    headers.set('X-Snapshot-TTL', '0');
+    headers.set('X-Snapshot-Updated', String(Date.now()));
     const body = await cached.clone().blob();
     const staleResponse = new Response(body, {
       status: cached.status,
@@ -340,7 +355,8 @@ async function invalidateMany({ urls = [], ids = [], snapshotIds = [] } = {}) {
         if (!shouldDelete && normalizedSnapshots.size) {
           const res = await cache.match(req);
           if (res) {
-            const snapshotId = res.headers.get('X-Cache-Snapshot-Id');
+            const snapshotId =
+              res.headers.get('X-Snapshot-Id') || res.headers.get('X-Cache-Snapshot-Id');
             if (snapshotId && normalizedSnapshots.has(snapshotId)) {
               shouldDelete = true;
             }

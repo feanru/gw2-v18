@@ -20,9 +20,11 @@ require.cache[redisPath] = {
   },
 };
 
-async function run() {
+async function testConcurrentBuildCoalescing() {
   const snapshotCache = require('../backend/utils/snapshotCache.js');
   snapshotCache.__private.clearLocal();
+  redisState.redisStore.clear();
+  redisState.redisExpiry.clear();
   delete require.cache[require.resolve('../backend/aggregates/buildItemAggregate.js')];
   const aggregateModuleFirst = require('../backend/aggregates/buildItemAggregate.js');
 
@@ -46,6 +48,43 @@ async function run() {
   assert.strictEqual(firstResult.meta.stale, false);
   assert.strictEqual(secondResult.meta.stale, false);
 
+  console.log('tests/aggregates-concurrent-build.test.js coalescing passed');
+}
+
+async function testSnapshotCacheStaleMetadata() {
+  const snapshotCache = require('../backend/utils/snapshotCache.js');
+  snapshotCache.__private.clearLocal();
+  redisState.redisStore.clear();
+  redisState.redisExpiry.clear();
+  delete require.cache[require.resolve('../backend/aggregates/buildItemAggregate.js')];
+  const aggregateModule = require('../backend/aggregates/buildItemAggregate.js');
+
+  const itemId = 1001;
+  const lang = 'es';
+  const built = await aggregateModule.buildItemAggregate(itemId, lang);
+  assert.ok(built?.meta, 'Debe construir un agregado inicial');
+
+  const cacheKey = `agg:${lang}:${itemId}`;
+  const envelope = snapshotCache.__private.localCache.get(cacheKey);
+  assert.ok(envelope, 'Debe existir un sobre en cache');
+  const now = Date.now();
+  envelope.a = now - 60_000;
+  envelope.r = now - 1_000;
+  envelope.e = now + 120_000;
+
+  const cached = await aggregateModule.getCachedAggregate(itemId, lang);
+  assert.ok(cached, 'Debe recuperar el agregado desde cache');
+  assert.strictEqual(cached.cache.stale, true, 'El cache debe marcarse como stale tras expirar el soft TTL');
+  assert.strictEqual(cached.meta.stale, true, 'La metadata del agregado debe reflejar el estado stale');
+  assert.ok(
+    typeof cached.cache.ageMs === 'number' && cached.cache.ageMs >= 1000,
+    'El metadata debe exponer la edad del cache',
+  );
+}
+
+async function run() {
+  await testConcurrentBuildCoalescing();
+  await testSnapshotCacheStaleMetadata();
   console.log('tests/aggregates-concurrent-build.test.js passed');
 }
 
