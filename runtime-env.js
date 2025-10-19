@@ -81,7 +81,7 @@
     if (Object.prototype.hasOwnProperty.call(runtime, 'FEATURE_ITEM_API_ROLLOUT')) {
       return runtime.FEATURE_ITEM_API_ROLLOUT;
     }
-    return true;
+    return false;
   })();
 
   // Este archivo debe servirse con `Cache-Control: no-store` para que los cambios
