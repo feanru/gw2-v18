@@ -3,7 +3,7 @@
 const { randomBytes } = require('crypto');
 const path = require('path');
 const { Worker } = require('worker_threads');
-const { createClient } = require('redis');
+const snapshotCache = require('../utils/snapshotCache');
 
 const DEFAULT_LANG = (process.env.DEFAULT_LANG || 'es').trim() || 'es';
 const FALLBACK_LANGS = Array.from(new Set(
@@ -16,7 +16,6 @@ const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017/gw2';
 const MONGO_READ_PREFERENCE = resolveMongoReadPreference(
   process.env.MONGO_READ_PREFERENCE,
 );
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const MAX_AGGREGATION_MS = Number(process.env.MAX_AGGREGATION_MS || 12000) || 12000;
 const SOFT_TTL_SECONDS = normalizePositiveInt(
   process.env.AGGREGATE_SOFT_TTL || process.env.CACHE_TTL_FAST,
@@ -35,10 +34,6 @@ const LOCK_WAIT_TIMEOUT_MS = MAX_AGGREGATION_MS * 2;
 const LOCK_POLL_INTERVAL_MS = 150;
 
 const WORKER_SCRIPT = path.resolve(__dirname, 'buildWorker.js');
-let redisClientPromise = null;
-let redisClient = null;
-
-const localCache = new Map();
 const inFlightBuilds = new Map();
 
 function normalizePositiveInt(value, fallback) {
@@ -152,94 +147,25 @@ function resolveMongoReadPreference(value) {
 }
 
 async function getRedisClient() {
-  if (redisClient && redisClient.isOpen) {
-    return redisClient;
-  }
-  if (redisClientPromise) {
-    return redisClientPromise;
-  }
-  try {
-    const client = createClient({ url: REDIS_URL });
-    client.on('error', (err) => {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn(`[aggregate] redis error: ${err.message}`);
-      }
-    });
-    redisClientPromise = client
-      .connect()
-      .then(() => {
-        redisClient = client;
-        return redisClient;
-      })
-      .catch((err) => {
-        if (process.env.NODE_ENV !== 'test') {
-          console.warn(`[aggregate] unable to connect to redis: ${err.message}`);
-        }
-        redisClientPromise = null;
-        redisClient = null;
-        return null;
-      });
-    return redisClientPromise;
-  } catch (err) {
-    if (process.env.NODE_ENV !== 'test') {
-      console.warn(`[aggregate] redis client error: ${err.message}`);
-    }
-    return null;
-  }
-}
-
-function setLocalCache(key, value) {
-  const hardExpiry = Date.now() + CACHE_TTL_SECONDS * 1000;
-  localCache.set(key, { value, expiresAt: hardExpiry });
-}
-
-function getLocalCache(key) {
-  const entry = localCache.get(key);
-  if (!entry) {
-    return null;
-  }
-  if (entry.expiresAt && entry.expiresAt <= Date.now()) {
-    localCache.delete(key);
-    return null;
-  }
-  return entry.value;
+  return snapshotCache.getClient();
 }
 
 async function readSnapshot(itemId, lang) {
   const key = cacheKey(itemId, lang);
-  const redis = await getRedisClient();
-  if (redis) {
-    try {
-      const raw = await redis.get(key);
-      if (!raw) {
-        return null;
-      }
-      return JSON.parse(raw);
-    } catch (err) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn(`[aggregate] redis read error: ${err.message}`);
-      }
-    }
-  }
-  return getLocalCache(key);
+  const cached = await snapshotCache.get(key, {
+    softTtlSeconds: SOFT_TTL_SECONDS,
+    hardTtlSeconds: CACHE_TTL_SECONDS,
+  });
+  return cached ? cached.value : null;
 }
 
 async function writeSnapshot(itemId, lang, payload) {
   const key = cacheKey(itemId, lang);
-  const redis = await getRedisClient();
-  if (redis) {
-    try {
-      await redis.set(key, JSON.stringify(payload), {
-        EX: CACHE_TTL_SECONDS,
-      });
-      return;
-    } catch (err) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn(`[aggregate] redis write error: ${err.message}`);
-      }
-    }
-  }
-  setLocalCache(key, payload);
+  await snapshotCache.set(key, payload, {
+    softTtlSeconds: SOFT_TTL_SECONDS,
+    hardTtlSeconds: CACHE_TTL_SECONDS,
+    tags: [`item:${itemId}`, `lang:${lang}`],
+  });
 }
 
 async function tryAcquireRedisLock(redis, key, token, ttlMs) {
@@ -511,7 +437,12 @@ async function getCachedAggregate(itemId, lang) {
   if (!Number.isFinite(normalizedId) || normalizedId <= 0) {
     return null;
   }
-  const payload = await readSnapshot(normalizedId, normalizedLang);
+  const key = cacheKey(normalizedId, normalizedLang);
+  const cacheEntry = await snapshotCache.get(key, {
+    softTtlSeconds: SOFT_TTL_SECONDS,
+    hardTtlSeconds: CACHE_TTL_SECONDS,
+  });
+  const payload = cacheEntry ? cacheEntry.value : null;
   if (!payload) {
     return null;
   }
@@ -523,14 +454,19 @@ async function getCachedAggregate(itemId, lang) {
     snapshotAt = null;
   }
   meta.snapshotAt = snapshotAt;
-  meta.stale = Boolean(meta.stale) || isExpired(meta);
+  const staleFromCache = cacheEntry ? Boolean(cacheEntry.stale) : false;
+  meta.stale = Boolean(meta.stale) || staleFromCache || isExpired(meta);
   meta.warnings = Array.isArray(payload.meta?.warnings)
     ? [...payload.meta.warnings]
     : [];
   meta.errors = Array.isArray(payload.meta?.errors) ? [...payload.meta.errors] : [];
+  const cacheMetadata = cacheEntry?.metadata
+    ? { ...cacheEntry.metadata, stale: staleFromCache }
+    : { stale: staleFromCache };
   return {
     data: payload.data,
     meta,
+    cache: cacheMetadata,
   };
 }
 

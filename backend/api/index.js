@@ -6,6 +6,7 @@ const { URL } = require('url');
 const crypto = require('crypto');
 const { MongoClient } = require('mongodb');
 const { createClient } = require('redis');
+const snapshotCache = require('../utils/snapshotCache');
 const aggregateModule = require('../aggregates/buildItemAggregate');
 const aggregateHelpers = require('./aggregate');
 const { createLegacyRouter } = require('./legacy');
@@ -74,6 +75,12 @@ const CACHE_TTL_FAST_SECONDS = Math.max(
   Number.parseInt(process.env.CACHE_TTL_FAST || process.env.CACHE_TTL_FAST_SECONDS || '120', 10) || 0,
   0,
 );
+const DASHBOARD_CACHE_SOFT_MS = Math.max(Number(process.env.DASHBOARD_CACHE_MS || 60000) || 0, 5000);
+const DASHBOARD_CACHE_HARD_MS = Math.max(
+  Number(process.env.DASHBOARD_CACHE_STALE_MS || 0) || DASHBOARD_CACHE_SOFT_MS * 5,
+  DASHBOARD_CACHE_SOFT_MS + 1000,
+);
+const DASHBOARD_CACHE_KEY = 'snapshot:dashboard';
 
 const GW2_ITEM_ENDPOINT = 'https://api.guildwars2.com/v2/items';
 const ITEM_FALLBACK_TIMEOUT_MS = Math.max(
@@ -104,6 +111,7 @@ let mongoClientPromise = null;
 let redisClientPromise = null;
 let redisClient = null;
 const alertNotificationState = new Map();
+let dashboardRefreshPromise = null;
 
 function normalizeLang(lang) {
   if (!lang) {
@@ -281,28 +289,78 @@ function toIsoString(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-function computeConditionalHeaders(meta, itemId, lang) {
+function resolveSnapshotId(meta) {
   if (!meta || typeof meta !== 'object') {
-    return { headers: {}, snapshotIso: null };
+    return null;
   }
-  const snapshotIso = toIsoString(meta.snapshotAt);
-  if (!snapshotIso) {
-    return { headers: {}, snapshotIso: null };
+  const candidates = [meta.snapshotAt, meta.generatedAt, meta.lastUpdated];
+  for (const candidate of candidates) {
+    const iso = toIsoString(candidate);
+    if (iso) {
+      return iso;
+    }
   }
+  return null;
+}
 
-  const normalizedLang = normalizeLang(meta.lang ?? lang ?? DEFAULT_LANG);
-  const hash = crypto.createHash('sha256');
-  hash.update(`${snapshotIso}|${String(itemId ?? '')}|${normalizedLang}`);
-  const etag = `"${hash.digest('hex')}"`;
+function computeSnapshotTtlMs(meta, cacheMetadata, { stale = false } = {}) {
+  if (stale || cacheMetadata?.stale) {
+    return 0;
+  }
+  const now = Date.now();
+  if (cacheMetadata && Number.isFinite(cacheMetadata.staleAt)) {
+    return Math.max(0, cacheMetadata.staleAt - now);
+  }
+  if (
+    cacheMetadata &&
+    Number.isFinite(cacheMetadata.softTtlMs) &&
+    Number.isFinite(cacheMetadata.storedAt)
+  ) {
+    return Math.max(0, cacheMetadata.storedAt + cacheMetadata.softTtlMs - now);
+  }
+  const expiresCandidate = meta?.expiresAt;
+  if (expiresCandidate != null) {
+    const expiresAt =
+      expiresCandidate instanceof Date ? expiresCandidate.getTime() : Date.parse(expiresCandidate);
+    if (Number.isFinite(expiresAt)) {
+      return Math.max(0, expiresAt - now);
+    }
+  }
+  return null;
+}
 
-  const snapshotDate = new Date(snapshotIso);
+function computeConditionalHeaders(meta, itemId, lang, options = {}) {
   const headers = {};
-  headers.ETag = etag;
-  if (!Number.isNaN(snapshotDate.getTime())) {
-    headers['Last-Modified'] = snapshotDate.toUTCString();
+  let snapshotIso = null;
+  if (meta && typeof meta === 'object') {
+    snapshotIso = toIsoString(meta.snapshotAt);
+    if (snapshotIso) {
+      const normalizedLang = normalizeLang(meta.lang ?? lang ?? DEFAULT_LANG);
+      const hash = crypto.createHash('sha256');
+      hash.update(`${snapshotIso}|${String(itemId ?? '')}|${normalizedLang}`);
+      const etag = `"${hash.digest('hex')}"`;
+      headers.ETag = etag;
+      const snapshotDate = new Date(snapshotIso);
+      if (!Number.isNaN(snapshotDate.getTime())) {
+        headers['Last-Modified'] = snapshotDate.toUTCString();
+      }
+    }
+
+    const snapshotId = options.snapshotId || resolveSnapshotId(meta);
+    if (snapshotId) {
+      headers['X-Snapshot-Id'] = snapshotId;
+    }
+
+    const ttlMs = computeSnapshotTtlMs(meta, options.cache, { stale: options.stale });
+    if (ttlMs != null) {
+      const ttlSeconds = Math.max(0, Math.floor(ttlMs / 1000));
+      headers['X-Snapshot-TTL'] = String(ttlSeconds);
+      return { headers, snapshotIso, snapshotId, ttlMs };
+    }
+    return { headers, snapshotIso, snapshotId, ttlMs: null };
   }
 
-  return { headers, snapshotIso };
+  return { headers, snapshotIso: null, snapshotId: null, ttlMs: null };
 }
 
 function shouldSendNotModified(req, headers, snapshotIso, options = {}) {
@@ -1696,6 +1754,17 @@ async function recordAggregateMetric(metric) {
       stale: Boolean(metric.stale),
       durationMs: Number.isFinite(metric.durationMs) ? Number(metric.durationMs) : null,
       source: metric.source || null,
+      cacheHit: typeof metric.cacheHit === 'boolean' ? metric.cacheHit : null,
+      cacheStale: typeof metric.cacheStale === 'boolean' ? metric.cacheStale : null,
+      cacheLookupMs: Number.isFinite(metric.cacheLookupMs) ? Number(metric.cacheLookupMs) : null,
+      snapshotId: metric.snapshotId != null ? String(metric.snapshotId) : null,
+      snapshotTtlMs: Number.isFinite(metric.snapshotTtlMs) ? Number(metric.snapshotTtlMs) : null,
+      itemId: Number.isFinite(metric.itemId) ? Number(metric.itemId) : null,
+      lang: metric.lang != null ? String(metric.lang) : null,
+      cacheAgeMs: Number.isFinite(metric.cacheAgeMs) ? Number(metric.cacheAgeMs) : null,
+      cacheStoredAt: Number.isFinite(metric.cacheStoredAt)
+        ? new Date(metric.cacheStoredAt)
+        : null,
       createdAt: new Date(),
     };
     await collection.insertOne(payload);
@@ -2495,6 +2564,74 @@ async function buildDashboardSnapshot() {
   };
 }
 
+async function refreshDashboardSnapshot() {
+  const snapshot = await buildDashboardSnapshot();
+  await snapshotCache.set(DASHBOARD_CACHE_KEY, snapshot, {
+    softTtlMs: DASHBOARD_CACHE_SOFT_MS,
+    hardTtlMs: DASHBOARD_CACHE_HARD_MS,
+    tags: ['dashboard'],
+  });
+  return snapshot;
+}
+
+function scheduleDashboardRefresh() {
+  if (dashboardRefreshPromise) {
+    return dashboardRefreshPromise;
+  }
+  dashboardRefreshPromise = refreshDashboardSnapshot()
+    .catch((err) => {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(`[admin] dashboard refresh failed: ${err.message}`);
+      }
+      return null;
+    })
+    .finally(() => {
+      dashboardRefreshPromise = null;
+    });
+  return dashboardRefreshPromise;
+}
+
+async function getDashboardSnapshotCached({ forceRefresh = false } = {}) {
+  const cacheOptions = {
+    softTtlMs: DASHBOARD_CACHE_SOFT_MS,
+    hardTtlMs: DASHBOARD_CACHE_HARD_MS,
+  };
+
+  if (!forceRefresh) {
+    const cached = await snapshotCache.get(DASHBOARD_CACHE_KEY, cacheOptions);
+    if (cached && cached.value) {
+      if (cached.stale) {
+        scheduleDashboardRefresh();
+      }
+      return {
+        snapshot: cached.value,
+        stale: Boolean(cached.stale),
+        cache: cached.metadata || null,
+      };
+    }
+  }
+
+  const refreshed = await scheduleDashboardRefresh();
+  if (!refreshed) {
+    return { snapshot: null, stale: true, cache: null };
+  }
+
+  const cached = await snapshotCache.get(DASHBOARD_CACHE_KEY, cacheOptions);
+  if (cached && cached.value) {
+    return {
+      snapshot: cached.value,
+      stale: Boolean(cached.stale),
+      cache: cached.metadata || null,
+    };
+  }
+
+  return { snapshot: refreshed, stale: false, cache: null };
+}
+
+async function invalidateDashboardSnapshotCache() {
+  await snapshotCache.invalidate(DASHBOARD_CACHE_KEY);
+}
+
 async function handleTelemetryJsError(req, res) {
   let body;
   try {
@@ -2620,10 +2757,21 @@ async function handleAdminDashboardRequest(req, res) {
   }
 
   try {
-    const snapshot = await buildDashboardSnapshot();
+    const { snapshot, stale: snapshotStale } = await getDashboardSnapshotCached();
+    if (!snapshot) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('[admin] dashboard snapshot not available');
+      }
+      fail(res, 503, 'errorDashboardUnavailable', 'Dashboard snapshot not available', {
+        source: 'admin',
+        stale: true,
+        lang: DEFAULT_LANG,
+      });
+      return;
+    }
     ok(res, snapshot, {
       source: 'admin',
-      stale: false,
+      stale: Boolean(snapshotStale),
       lang: DEFAULT_LANG,
       lastUpdated: snapshot.generatedAt,
     });
@@ -2744,9 +2892,29 @@ async function handleGetAggregate(req, res, itemId, lang) {
   let stale = false;
   let source = 'aggregate';
   let cached = null;
+  let cacheLookupMs = null;
+  let cacheHit = false;
+  let cacheStale = false;
+  let cacheMetadata = null;
+  let snapshotIdForMetrics = null;
+  let snapshotTtlMs = null;
+  let cacheAgeMs = null;
+  let cacheStoredAt = null;
   try {
+    const cacheLookupStart = process.hrtime.bigint();
     cached = await getCachedAggregateFn(itemId, lang);
+    cacheLookupMs = Number(process.hrtime.bigint() - cacheLookupStart) / 1e6;
+    if (!Number.isFinite(cacheLookupMs) || cacheLookupMs < 0) {
+      cacheLookupMs = null;
+    }
     if (cached && cached.data) {
+      cacheHit = true;
+      cacheMetadata = cached.cache || null;
+      cacheStale = Boolean(cacheMetadata?.stale) || Boolean(cached.meta?.stale);
+      if (cacheMetadata) {
+        cacheAgeMs = Number.isFinite(cacheMetadata.ageMs) ? cacheMetadata.ageMs : null;
+        cacheStoredAt = Number.isFinite(cacheMetadata.storedAt) ? cacheMetadata.storedAt : null;
+      }
       const expired = isAggregateExpiredFn(cached.meta);
       if (expired) {
         scheduleAggregateBuildFn(itemId, lang).catch((err) => {
@@ -2757,6 +2925,7 @@ async function handleGetAggregate(req, res, itemId, lang) {
       }
 
       stale = expired || cached.meta?.stale || false;
+      cacheStale = cacheStale || stale;
       source = cached.meta?.source || 'aggregate';
       const { meta, errors } = mergeAggregateMeta(cached.meta, {
         lang,
@@ -2764,7 +2933,16 @@ async function handleGetAggregate(req, res, itemId, lang) {
         source: 'aggregate',
         stale,
       });
-      const { headers, snapshotIso } = computeConditionalHeaders(meta, itemId, lang);
+      const { headers, snapshotIso, snapshotId, ttlMs } = computeConditionalHeaders(meta, itemId, lang, {
+        cache: cacheMetadata,
+        stale,
+      });
+      if (!snapshotIdForMetrics) {
+        snapshotIdForMetrics = snapshotId || resolveSnapshotId(meta);
+      }
+      if (ttlMs != null) {
+        snapshotTtlMs = ttlMs;
+      }
       if (
         shouldSendNotModified(req, headers, snapshotIso, {
           stale,
@@ -2818,7 +2996,16 @@ async function handleGetAggregate(req, res, itemId, lang) {
         source: 'aggregate',
         stale: false,
       });
-      const { headers, snapshotIso } = computeConditionalHeaders(meta, itemId, lang);
+      const { headers, snapshotIso, snapshotId, ttlMs } = computeConditionalHeaders(meta, itemId, lang, {
+        cache: null,
+        stale: false,
+      });
+      if (!snapshotIdForMetrics) {
+        snapshotIdForMetrics = snapshotId || resolveSnapshotId(meta);
+      }
+      if (ttlMs != null) {
+        snapshotTtlMs = ttlMs;
+      }
       if (
         shouldSendNotModified(req, headers, snapshotIso, {
           stale: false,
@@ -2863,7 +3050,19 @@ async function handleGetAggregate(req, res, itemId, lang) {
         snapshotAt: fallbackSnapshotAt,
         errors: ['aggregateFallback'],
       });
-      const { headers } = computeConditionalHeaders(meta, itemId, lang);
+      const { headers, snapshotId, ttlMs } = computeConditionalHeaders(meta, itemId, lang, {
+        cache: cacheMetadata,
+        stale: true,
+      });
+      cacheStale = true;
+      if (!snapshotIdForMetrics) {
+        snapshotIdForMetrics = snapshotId || resolveSnapshotId(meta);
+      }
+      if (ttlMs != null) {
+        snapshotTtlMs = ttlMs;
+      } else {
+        snapshotTtlMs = 0;
+      }
       ok(res, cached.data, meta, { errors, headers });
     } else {
       stale = false;
@@ -2886,6 +3085,15 @@ async function handleGetAggregate(req, res, itemId, lang) {
       stale,
       durationMs: Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null,
       source,
+      cacheHit,
+      cacheStale,
+      cacheLookupMs,
+      snapshotId: snapshotIdForMetrics,
+      snapshotTtlMs,
+      itemId: Number(itemId),
+      lang: normalizeLang(lang),
+      cacheAgeMs,
+      cacheStoredAt,
     });
   }
 }
@@ -3346,6 +3554,8 @@ module.exports.normalizeLang = normalizeLang;
 module.exports.ok = ok;
 module.exports.fail = fail;
 module.exports.buildDashboardSnapshot = buildDashboardSnapshot;
+module.exports.getDashboardSnapshotCached = getDashboardSnapshotCached;
+module.exports.invalidateDashboardSnapshotCache = invalidateDashboardSnapshotCache;
 module.exports.__setLegacyOverrides = setLegacyOverrides;
 module.exports.__resetLegacyOverrides = resetLegacyOverrides;
 

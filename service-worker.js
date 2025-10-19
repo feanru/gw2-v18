@@ -13,6 +13,32 @@ const VIDEO_ASSETS = [
 const VERSIONED_DIST_REGEX = /^\d+\.\d+\.\d+$/;
 const WORKER_PATH_REGEX = /^\/dist\/\d+\.\d+\.\d+\/js\/workers\//;
 
+const cacheMetrics = { hit: 0, miss: 0, stale: 0 };
+
+async function broadcastCacheMetrics() {
+  try {
+    const clients = await self.clients.matchAll({ type: 'window' });
+    const payload = { type: 'cache-metrics', metrics: { ...cacheMetrics } };
+    clients.forEach((client) => {
+      try {
+        client.postMessage(payload);
+      } catch (err) {
+        // Ignore postMessage errors
+      }
+    });
+  } catch (err) {
+    // Ignore broadcast errors
+  }
+}
+
+function incrementCacheMetric(metric) {
+  if (typeof cacheMetrics[metric] !== 'number') {
+    cacheMetrics[metric] = 0;
+  }
+  cacheMetrics[metric] += 1;
+  broadcastCacheMetrics();
+}
+
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
@@ -103,6 +129,8 @@ self.addEventListener('message', (event) => {
     event.waitUntil(caches.open(API_CACHE).then((c) => c.delete(data.url)));
   } else if (data.type === 'invalidateItem' && data.id != null) {
     event.waitUntil(invalidateItem(data.id));
+  } else if (data.type === 'invalidateMany') {
+    event.waitUntil(invalidateMany(data));
   } else if (data.type === 'invalidateAll') {
     event.waitUntil(caches.delete(API_CACHE));
   }
@@ -126,13 +154,49 @@ async function cacheFirst(req, cacheName) {
   return res;
 }
 
-function getTTLFromResponse(res) {
-  const cc = res.headers.get('Cache-Control') || '';
-  const maxAgeMatch = cc.match(/max-age=(\d+)/);
-  if (maxAgeMatch) return parseInt(maxAgeMatch[1], 10) * 1000;
-  const custom = res.headers.get('X-Cache-Ttl');
-  if (custom) return parseInt(custom, 10) * 1000;
-  return DEFAULT_TTL;
+function computeCachePolicy(res) {
+  const policy = {
+    ttlMs: null,
+    expiresAt: null,
+    snapshotId: null,
+    stale: false,
+  };
+  const snapshotId = res.headers.get('X-Snapshot-Id');
+  if (snapshotId) {
+    policy.snapshotId = snapshotId;
+  }
+  const ttlHeader = res.headers.get('X-Snapshot-TTL');
+  if (ttlHeader != null) {
+    const ttlSeconds = parseInt(ttlHeader, 10);
+    if (Number.isFinite(ttlSeconds)) {
+      policy.ttlMs = Math.max(0, ttlSeconds * 1000);
+      policy.stale = ttlSeconds <= 0;
+    }
+  }
+  if (policy.ttlMs == null) {
+    const cc = res.headers.get('Cache-Control') || '';
+    const maxAgeMatch = cc.match(/max-age=(\d+)/);
+    if (maxAgeMatch) {
+      const ttlSeconds = parseInt(maxAgeMatch[1], 10);
+      if (Number.isFinite(ttlSeconds)) {
+        policy.ttlMs = Math.max(0, ttlSeconds * 1000);
+      }
+    }
+  }
+  if (policy.ttlMs == null) {
+    const legacy = res.headers.get('X-Cache-Ttl');
+    if (legacy) {
+      const ttlSeconds = parseInt(legacy, 10);
+      if (Number.isFinite(ttlSeconds)) {
+        policy.ttlMs = Math.max(0, ttlSeconds * 1000);
+      }
+    }
+  }
+  if (policy.ttlMs == null) {
+    policy.ttlMs = DEFAULT_TTL;
+  }
+  policy.expiresAt = Date.now() + policy.ttlMs;
+  return policy;
 }
 
 async function staleWhileRevalidate(req, cacheName) {
@@ -143,11 +207,24 @@ async function staleWhileRevalidate(req, cacheName) {
   const fetchAndUpdate = async () => {
     const netRes = await fetch(req);
     if (netRes.ok) {
-      const ttl = getTTLFromResponse(netRes);
+      const policy = computeCachePolicy(netRes);
       const headers = new Headers(netRes.headers);
-      if (ttl) {
-        headers.set('X-Cache-Expires', Date.now() + ttl);
+      if (policy.expiresAt != null) {
+        headers.set('X-Cache-Expires', String(policy.expiresAt));
+      } else {
+        headers.delete('X-Cache-Expires');
       }
+      if (typeof policy.ttlMs === 'number') {
+        headers.set('X-Cache-TtlMs', String(policy.ttlMs));
+      } else {
+        headers.delete('X-Cache-TtlMs');
+      }
+      if (policy.snapshotId) {
+        headers.set('X-Cache-Snapshot-Id', policy.snapshotId);
+      } else {
+        headers.delete('X-Cache-Snapshot-Id');
+      }
+      headers.set('X-Cache-Stale', policy.stale ? '1' : '0');
       const body = await netRes.clone().blob();
       const res = new Response(body, {
         status: netRes.status,
@@ -163,12 +240,25 @@ async function staleWhileRevalidate(req, cacheName) {
 
   if (cached) {
     const exp = parseInt(cached.headers.get('X-Cache-Expires') || '0', 10);
-    if (exp && now < exp) {
+    const wasStale = cached.headers.get('X-Cache-Stale') === '1';
+    if (exp && now < exp && !wasStale) {
+      incrementCacheMetric('hit');
       return { response: cached, fetchPromise: null };
     }
-    return { response: cached, fetchPromise: fetchAndUpdate() };
+    incrementCacheMetric('hit');
+    incrementCacheMetric('stale');
+    const headers = new Headers(cached.headers);
+    headers.set('X-Cache-Stale', '1');
+    const body = await cached.clone().blob();
+    const staleResponse = new Response(body, {
+      status: cached.status,
+      statusText: cached.statusText,
+      headers,
+    });
+    return { response: staleResponse, fetchPromise: fetchAndUpdate() };
   }
 
+  incrementCacheMetric('miss');
   const fetchPromise = fetchAndUpdate();
   return { response: fetchPromise, fetchPromise: null };
 }
@@ -215,6 +305,57 @@ async function invalidateItem(id) {
       return null;
     })
   );
+}
+
+async function invalidateMany({ urls = [], ids = [], snapshotIds = [] } = {}) {
+  const normalizedUrls = new Set(
+    (Array.isArray(urls) ? urls : [])
+      .map((entry) => {
+        try {
+          return new URL(entry, self.location.origin).href;
+        } catch (err) {
+          return null;
+        }
+      })
+      .filter((value) => value != null),
+  );
+  const normalizedSnapshots = new Set(
+    (Array.isArray(snapshotIds) ? snapshotIds : [])
+      .map((entry) => {
+        if (entry == null) return null;
+        return String(entry);
+      })
+      .filter((value) => value),
+  );
+
+  if (normalizedUrls.size || normalizedSnapshots.size) {
+    const cache = await caches.open(API_CACHE);
+    const keys = await cache.keys();
+    await Promise.all(
+      keys.map(async (req) => {
+        let shouldDelete = false;
+        if (normalizedUrls.size && normalizedUrls.has(req.url)) {
+          shouldDelete = true;
+        }
+        if (!shouldDelete && normalizedSnapshots.size) {
+          const res = await cache.match(req);
+          if (res) {
+            const snapshotId = res.headers.get('X-Cache-Snapshot-Id');
+            if (snapshotId && normalizedSnapshots.has(snapshotId)) {
+              shouldDelete = true;
+            }
+          }
+        }
+        if (shouldDelete) {
+          await cache.delete(req);
+        }
+      }),
+    );
+  }
+
+  if (Array.isArray(ids) && ids.length) {
+    await Promise.all(ids.map((value) => invalidateItem(value)));
+  }
 }
 
 async function purgeWorkerEntries(cacheName) {
