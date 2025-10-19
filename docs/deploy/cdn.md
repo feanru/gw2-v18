@@ -6,7 +6,7 @@ Esta guía describe cómo activar la entrega de assets estáticos desde un domin
 
 1. Define la variable de entorno `CDN_BASE_URL` apuntando al dominio público de la CDN (por ejemplo `https://static.example.com`).
 2. Reinicia Nginx con la variable exportada. El bloque `http` lee `CDN_BASE_URL` y la inyecta en la política CSP para permitir que navegadores carguen scripts, estilos, fuentes e imágenes desde ese dominio.
-3. Cuando el valor está presente, las peticiones directas a `/dist/<versión>/js/*` reciben un `302` hacia la CDN. Esto mantiene la ruta versionada y evita servir los bundles desde el origen por accidente.
+3. Cuando el valor está presente, las peticiones directas a `/dist/<versión>/js/*` reciben un `302` hacia la CDN. Esto mantiene la ruta versionada y evita servir los bundles desde el origen por accidente. La CDN debe responder esos recursos con `Cache-Control: public, s-maxage=3600, stale-while-revalidate=60` para equilibrar frescura y disponibilidad.
 
 > **Nota:** Los assets se siguen construyendo en `dist/`. Asegúrate de sincronizar ese directorio con la CDN antes de purgarla para no exponer rutas inexistentes.
 
@@ -32,7 +32,7 @@ npm run purge:cdn
 Se añadió `tests/cdn-cache.test.mjs`, que levanta un servidor HTTP temporal con encabezados equivalentes a la CDN y usa `fetch` para solicitar cada ruta versionada del manifest. El test comprueba:
 
 - Respuesta `200` para cada asset.
-- Encabezado `Cache-Control` con `max-age=31536000` e `immutable`.
+- Encabezado `Cache-Control` con `public`, `s-maxage=3600` y `stale-while-revalidate=60`.
 - Presencia de `ETag`.
 
 Incluye el test en tu pipeline (`npm test`) para detectar rutas faltantes o encabezados incorrectos antes de desplegar.
