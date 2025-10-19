@@ -14,13 +14,45 @@ function createResponse({ status = 200, ok = true, body = {}, headers = {} } = {
         return null;
       },
     },
+    clone() {
+      return createResponse({ status, ok, body, headers });
+    },
     async json() {
       return body;
     },
   };
 }
 
-function setupEnvironment({ featureFlag, fetchHandlers = [] } = {}) {
+function createServiceWorkerStub() {
+  const listeners = new Map();
+  const stub = {
+    addEventListener(type, listener) {
+      if (!listeners.has(type)) {
+        listeners.set(type, []);
+      }
+      listeners.get(type).push(listener);
+    },
+    async register() {
+      return { update() {}, unregister() {} };
+    },
+    controller: {
+      postMessage() {},
+    },
+  };
+  stub.dispatchMessage = (data) => {
+    const callbacks = listeners.get('message') || [];
+    callbacks.forEach((cb) => {
+      try {
+        cb({ data });
+      } catch (err) {
+        // ignore listener errors
+      }
+    });
+  };
+  return stub;
+}
+
+function setupEnvironment({ featureFlag, fetchHandlers = [], serviceWorker = false } = {}) {
   const previous = {
     window: Object.prototype.hasOwnProperty.call(globalThis, 'window') ? globalThis.window : undefined,
     CustomEvent: Object.prototype.hasOwnProperty.call(globalThis, 'CustomEvent')
@@ -36,6 +68,11 @@ function setupEnvironment({ featureFlag, fetchHandlers = [] } = {}) {
     runtimeConfig: Object.prototype.hasOwnProperty.call(globalThis, '__RUNTIME_CONFIG__')
       ? globalThis.__RUNTIME_CONFIG__
       : undefined,
+    document: Object.prototype.hasOwnProperty.call(globalThis, 'document') ? globalThis.document : undefined,
+    navigator: Object.prototype.hasOwnProperty.call(globalThis, 'navigator')
+      ? globalThis.navigator
+      : undefined,
+    alert: Object.prototype.hasOwnProperty.call(globalThis, 'alert') ? globalThis.alert : undefined,
   };
 
   const events = [];
@@ -44,6 +81,37 @@ function setupEnvironment({ featureFlag, fetchHandlers = [] } = {}) {
     FEATURE_ITEM_API_ROLLOUT: featureFlag,
     FETCH_GUARD_WHITELIST: [],
   };
+
+  const domListeners = new Map();
+  const bodyChildren = [];
+  const documentStub = {
+    addEventListener(type, listener) {
+      if (!domListeners.has(type)) {
+        domListeners.set(type, []);
+      }
+      domListeners.get(type).push(listener);
+    },
+    createElement(tag) {
+      return {
+        tagName: String(tag || '').toUpperCase(),
+        style: {},
+        children: [],
+        textContent: '',
+        appendChild(child) {
+          this.children.push(child);
+        },
+      };
+    },
+  };
+  documentStub.body = {
+    children: bodyChildren,
+    appendChild(child) {
+      bodyChildren.push(child);
+    },
+  };
+
+  const serviceWorkerStub = serviceWorker ? createServiceWorkerStub() : null;
+  const navigatorStub = serviceWorkerStub ? { serviceWorker: serviceWorkerStub } : undefined;
 
   const windowStub = {
     dispatchEvent(evt) {
@@ -93,9 +161,25 @@ function setupEnvironment({ featureFlag, fetchHandlers = [] } = {}) {
   globalThis.localStorage = storageStub;
   globalThis.sessionStorage = storageStub;
   globalThis.__RUNTIME_CONFIG__ = runtimeConfig;
+  globalThis.document = documentStub;
+  if (navigatorStub) {
+    globalThis.navigator = navigatorStub;
+  }
+  globalThis.alert = () => {};
 
   return {
     events,
+    serviceWorker: serviceWorkerStub,
+    triggerDOMContentLoaded() {
+      const callbacks = domListeners.get('DOMContentLoaded') || [];
+      callbacks.forEach((cb) => {
+        try {
+          cb();
+        } catch (err) {
+          // ignore listener errors
+        }
+      });
+    },
     restore() {
       if (previous.window === undefined) {
         delete globalThis.window;
@@ -126,6 +210,21 @@ function setupEnvironment({ featureFlag, fetchHandlers = [] } = {}) {
         delete globalThis.__RUNTIME_CONFIG__;
       } else {
         globalThis.__RUNTIME_CONFIG__ = previous.runtimeConfig;
+      }
+      if (previous.document === undefined) {
+        delete globalThis.document;
+      } else {
+        globalThis.document = previous.document;
+      }
+      if (previous.navigator === undefined) {
+        delete globalThis.navigator;
+      } else {
+        globalThis.navigator = previous.navigator;
+      }
+      if (previous.alert === undefined) {
+        delete globalThis.alert;
+      } else {
+        globalThis.alert = previous.alert;
       }
     },
   };
@@ -262,9 +361,75 @@ async function testFallbackCachesAndTelemetryWhenModernFails() {
   env.restore();
 }
 
+async function testFetchDedupCoalescesRequests() {
+  let fetchCount = 0;
+  const env = setupEnvironment({
+    featureFlag: true,
+    fetchHandlers: [
+      {
+        match(url) {
+          return url === '/api/dedup';
+        },
+        async response() {
+          fetchCount += 1;
+          return {
+            ok: true,
+            status: 200,
+            headers: {
+              get(name) {
+                return name && name.toLowerCase() === 'content-type' ? 'application/json' : null;
+              },
+            },
+            clone() {
+              return this;
+            },
+          };
+        },
+      },
+    ],
+  });
+
+  const cacheModule = await import(`../../src/js/utils/cache.js?dedup-${Date.now()}`);
+
+  const [first, second] = await Promise.all([
+    cacheModule.fetchDedup('/api/dedup'),
+    cacheModule.fetchDedup('/api/dedup'),
+  ]);
+
+  assert.equal(fetchCount, 1, 'fetchDedup debe coalescer llamadas concurrentes');
+  assert.ok(first, 'Debe retornar una respuesta clonada');
+  assert.ok(second, 'Debe retornar una segunda respuesta clonada');
+
+  env.restore();
+}
+
+async function testServiceWorkerMetricsTelemetry() {
+  const env = setupEnvironment({ featureFlag: true, serviceWorker: true });
+
+  await import(`../../src/js/sw-register.js?metrics-${Date.now()}`);
+
+  env.triggerDOMContentLoaded();
+
+  await Promise.resolve();
+
+  env.serviceWorker.dispatchMessage({
+    type: 'cache-metrics',
+    metrics: { hit: 2, miss: 1, stale: 1, lastUpdated: 1234 },
+  });
+
+  assert.deepEqual(window.__cacheMetrics__, { hit: 2, miss: 1, stale: 1, lastUpdated: 1234 });
+  const lastEvent = env.events.at(-1);
+  assert.equal(lastEvent?.type, 'cache-metrics', 'Debe despachar un CustomEvent con las métricas');
+  assert.deepEqual(lastEvent?.detail, window.__cacheMetrics__);
+
+  env.restore();
+}
+
 async function run() {
   await testCachesUpdatedAfterModernBundleSuccess();
   await testFallbackCachesAndTelemetryWhenModernFails();
+  await testFetchDedupCoalescesRequests();
+  await testServiceWorkerMetricsTelemetry();
   console.log('tests/frontend/item-bundle-cache.test.mjs passed');
 }
 
