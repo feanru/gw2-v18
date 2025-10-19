@@ -1,4 +1,5 @@
 import fetchWithRetry from '../utils/fetchWithRetry.js';
+import { buildLegacyAggregatePayload } from '../utils/fetchAggregateBundle.js';
 import { getConfig } from '../config.js';
 
 const DEFAULT_TTL = 2 * 60 * 1000; // 2 minutos
@@ -85,6 +86,9 @@ async function requestAggregate(ids, options = {}) {
   ids.forEach((id) => {
     params.append('ids[]', String(id));
   });
+  if (ids.length > 0) {
+    params.set('ids', ids.join(','));
+  }
   params.set('lang', String(lang));
   if (Array.isArray(options.fields) && options.fields.length > 0) {
     params.set('fields', options.fields.join(','));
@@ -96,31 +100,48 @@ async function requestAggregate(ids, options = {}) {
     params.set('pageSize', Math.floor(Number(options.pageSize)));
   }
   const requestUrl = `${joinApiPath(baseUrl, '/aggregate/bundle')}?${params.toString()}`;
-  const response = await fetchWithRetry(requestUrl, {
-    signal: options.signal,
-    headers: {
-      Accept: 'application/json, text/plain;q=0.9',
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`Error ${response.status} al consultar el agregado de bundle`);
-  }
-  const contentType = response.headers?.get?.('content-type') || response.headers?.get?.('Content-Type') || '';
-  const rawText = await response.text();
-  let payload = null;
-  if (rawText) {
-    try {
-      payload = JSON.parse(rawText);
-    } catch (err) {
-      throw new Error(
-        `Datos no válidos del agregado de bundle (content-type: ${contentType || 'desconocido'})`,
-      );
+  try {
+    const response = await fetchWithRetry(requestUrl, {
+      signal: options.signal,
+      headers: {
+        Accept: 'application/json, text/plain;q=0.9',
+      },
+    });
+    if (!response.ok) {
+      const error = new Error(`Error ${response.status} al consultar el agregado de bundle`);
+      error.code = 'AGGREGATE_HTTP_ERROR';
+      throw error;
     }
+    const contentType = response.headers?.get?.('content-type') || response.headers?.get?.('Content-Type') || '';
+    const rawText = await response.text();
+    let payload = null;
+    if (rawText) {
+      try {
+        payload = JSON.parse(rawText);
+      } catch (err) {
+        const error = new Error(
+          `Datos no válidos del agregado de bundle (content-type: ${contentType || 'desconocido'})`,
+        );
+        error.code = 'AGGREGATE_INVALID_JSON';
+        error.cause = err;
+        throw error;
+      }
+    }
+    if (!payload || typeof payload !== 'object') {
+      const error = new Error('Datos no válidos del agregado de bundle');
+      error.code = 'AGGREGATE_INVALID_PAYLOAD';
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (options.signal?.aborted || error?.name === 'AbortError') {
+      throw error;
+    }
+    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('[donesAggregate] API fallback for aggregate bundle', error);
+    }
+    return buildLegacyAggregatePayload(ids, { lang, includePagination: true });
   }
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Datos no válidos del agregado de bundle');
-  }
-  return payload;
 }
 
 export async function fetchDonesAggregate(rawIds = [], options = {}) {

@@ -1,4 +1,5 @@
 import fetchWithRetry from './fetchWithRetry.js';
+import { getItemBundles } from '../services/recipeService.js';
 import { getConfig } from '../config.js';
 
 function emitCacheMetric(metric) {
@@ -77,60 +78,203 @@ function joinApiPath(baseUrl, path) {
   return `${trimmedBase}/${normalizedPath}`;
 }
 
-export default async function fetchAggregateBundle(ids = [], options = {}) {
-  if (!Array.isArray(ids) || ids.length === 0) {
+function normalizeLegacyMarketEntry(market) {
+  if (!market || typeof market !== 'object') {
+    return { buy_price: null, sell_price: null };
+  }
+
+  const parseNumber = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+  };
+
+  const buy = [
+    market.buy_price,
+    market.buyPrice,
+    market.buys?.unit_price,
+    market.buy?.unit_price,
+  ].map(parseNumber).find((value) => value != null);
+
+  const sell = [
+    market.sell_price,
+    market.sellPrice,
+    market.sells?.unit_price,
+    market.sell?.unit_price,
+  ].map(parseNumber).find((value) => value != null);
+
+  return { buy_price: buy ?? null, sell_price: sell ?? null };
+}
+
+function extractLegacyTimestamp(entry) {
+  const { extra } = entry && typeof entry === 'object' ? entry : {};
+  const candidates = [
+    extra?.last_updated,
+    extra?.lastUpdated,
+    extra?.lastUpdatedAt,
+  ];
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      continue;
+    }
+    const millis = numeric > 1e12 ? numeric : numeric * 1000;
+    if (Number.isFinite(millis) && millis > 0) {
+      return millis;
+    }
+  }
+  return null;
+}
+
+function normalizeLegacyItem(id, item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const normalizeString = (value) => {
+    if (value == null) return null;
+    const text = String(value).trim();
+    return text ? text : null;
+  };
+
+  const normalizeNumber = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  return {
+    id: Number.isFinite(Number(id)) ? Number(id) : normalizeNumber(item.id) ?? null,
+    name: normalizeString(item.name),
+    icon: normalizeString(item.icon),
+    type: normalizeString(item.type),
+    rarity: normalizeString(item.rarity),
+    level: normalizeNumber(item.level),
+  };
+}
+
+export async function buildLegacyAggregatePayload(ids, { lang, includePagination = false } = {}) {
+  const normalizedLang = typeof lang === 'string' && lang.trim() ? lang.trim() : 'es';
+  const lookupIds = ids.map((value) => normalizeId(value)).filter((value) => {
+    if (value == null || value === '') {
+      return false;
+    }
+    if (Number.isFinite(value)) {
+      return value > 0;
+    }
+    const text = String(value).trim();
+    return Boolean(text);
+  });
+
+  if (lookupIds.length === 0) {
+    const meta = {
+      source: 'fallback',
+      lang: normalizedLang,
+      stale: true,
+      errors: [{ code: 'no_ids', msg: 'No item ids provided for legacy aggregate' }],
+    };
+    if (includePagination) {
+      meta.pagination = { page: 1, pageSize: 0, totalPages: 1, hasNext: false };
+    }
     return {
-      priceMap: new Map(),
-      iconMap: new Map(),
-      rarityMap: new Map(),
-      itemMap: new Map(),
-      meta: null,
+      priceMap: {},
+      iconMap: {},
+      rarityMap: {},
+      itemMap: {},
+      meta,
     };
   }
 
-  const {
-    iconCache,
-    rarityCache,
-    itemCache,
-    fields,
-    page,
-    pageSize,
-    signal,
-  } = options || {};
+  let bundles;
+  try {
+    bundles = await getItemBundles(lookupIds);
+  } catch (err) {
+    const error = new Error('Legacy aggregate fallback failed');
+    error.cause = err;
+    throw error;
+  }
 
-  const config = getConfig();
-  const baseUrl = config?.API_BASE_URL || '/api';
-  const defaultLang = options.lang || config?.DEFAULT_LANG || 'es';
+  const priceMap = {};
+  const iconMap = {};
+  const rarityMap = {};
+  const itemMap = {};
+  const errors = [];
+  let latestTimestamp = 0;
 
-  const params = new URLSearchParams();
-  const normalizedIds = ids
-    .map((value) => normalizeId(value))
-    .filter((value) => {
-      if (value == null || value === '') {
-        return false;
-      }
-      if (Number.isFinite(value)) {
-        return value > 0;
-      }
-      const text = String(value).trim();
-      return Boolean(text);
-    });
-  normalizedIds.forEach((id) => {
-    params.append('ids[]', String(id));
+  lookupIds.forEach((rawId, index) => {
+    const normalizedId = normalizeId(rawId);
+    const numericId = Number.isFinite(Number(normalizedId)) ? Number(normalizedId) : null;
+    const key = String(normalizedId);
+    const bundle = Array.isArray(bundles) ? bundles[index] : null;
+
+    if (!bundle || typeof bundle !== 'object') {
+      priceMap[key] = { id: numericId ?? null, buy_price: null, sell_price: null };
+      iconMap[key] = null;
+      rarityMap[key] = null;
+      itemMap[key] = null;
+      errors.push({ code: 'missing_bundle', msg: `Missing bundle data for ${key}` });
+      return;
+    }
+
+    const marketEntry = normalizeLegacyMarketEntry(bundle.market);
+    priceMap[key] = {
+      id: numericId ?? null,
+      buy_price: marketEntry.buy_price,
+      sell_price: marketEntry.sell_price,
+    };
+
+    const itemEntry = normalizeLegacyItem(normalizedId, bundle.item);
+    iconMap[key] = itemEntry?.icon ?? null;
+    rarityMap[key] = itemEntry?.rarity ?? null;
+    itemMap[key] = itemEntry;
+
+    const timestamp = extractLegacyTimestamp(bundle);
+    if (timestamp && timestamp > latestTimestamp) {
+      latestTimestamp = timestamp;
+    }
   });
-  params.set('lang', String(defaultLang));
-  const normalizedFields = normalizeFields(fields);
-  if (normalizedFields) {
-    params.set('fields', normalizedFields);
+
+  const meta = {
+    source: 'fallback',
+    lang: normalizedLang,
+    stale: true,
+    warnings: [{ code: 'legacy_fallback', msg: 'Legacy bundle fallback used' }],
+  };
+  if (latestTimestamp > 0) {
+    try {
+      meta.lastUpdated = new Date(latestTimestamp).toISOString();
+    } catch {
+      meta.lastUpdated = undefined;
+    }
   }
-  if (page != null) {
-    params.set('page', String(page));
+  if (errors.length > 0) {
+    meta.errors = errors;
   }
-  if (pageSize != null) {
-    params.set('pageSize', String(pageSize));
+  if (includePagination) {
+    meta.pagination = {
+      page: 1,
+      pageSize: lookupIds.length,
+      totalPages: 1,
+      hasNext: false,
+    };
   }
 
-  const requestUrl = `${joinApiPath(baseUrl, '/aggregate/bundle')}?${params.toString()}`;
+  return {
+    priceMap,
+    iconMap,
+    rarityMap,
+    itemMap,
+    meta,
+  };
+}
+
+async function fetchAggregateFromApi({
+  requestUrl,
+  signal,
+  fields,
+  normalizedIds,
+  iconCache,
+  rarityCache,
+  itemCache,
+}) {
   const response = await fetchWithRetry(requestUrl, {
     signal,
     headers: {
@@ -138,7 +282,9 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     },
   });
   if (!response.ok) {
-    throw new Error(`Error ${response.status} al consultar el agregado de bundle`);
+    const error = new Error(`Error ${response.status} al consultar el agregado de bundle`);
+    error.code = 'AGGREGATE_HTTP_ERROR';
+    throw error;
   }
 
   const contentType = response.headers.get('content-type') || '';
@@ -148,13 +294,18 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     try {
       payload = JSON.parse(rawText);
     } catch (err) {
-      throw new Error(
+      const error = new Error(
         `Datos no válidos del agregado de bundle (content-type: ${contentType || 'desconocido'})`,
       );
+      error.code = 'AGGREGATE_INVALID_JSON';
+      error.cause = err;
+      throw error;
     }
   }
   if (!payload || typeof payload !== 'object') {
-    throw new Error('Datos no válidos del agregado de bundle');
+    const error = new Error('Datos no válidos del agregado de bundle');
+    error.code = 'AGGREGATE_INVALID_PAYLOAD';
+    throw error;
   }
 
   const snapshotIdHeader = response.headers.get('X-Snapshot-Id');
@@ -214,9 +365,7 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     });
   }
 
-  const normalizedIdsForValidation = normalizedIds.length > 0
-    ? normalizedIds
-    : ids.map((value) => normalizeId(value));
+  const normalizedIdsForValidation = normalizedIds;
   const hasErrors = Array.isArray(payload.errors)
     ? payload.errors.length > 0
     : Boolean(payload.errors);
@@ -235,7 +384,10 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
   });
 
   if (hasErrors || missingIds.length > 0) {
-    throw new Error('Datos incompletos del agregado de bundle');
+    const error = new Error('Datos incompletos del agregado de bundle');
+    error.code = 'AGGREGATE_INCOMPLETE';
+    error.missingIds = missingIds;
+    throw error;
   }
 
   const normalizedMeta = { ...(payload.meta || {}) };
@@ -267,4 +419,123 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     itemMap,
     meta: normalizedMeta,
   };
+}
+
+function convertLegacyPayloadToMaps(payload) {
+  const priceMap = new Map();
+  const iconMap = new Map();
+  const rarityMap = new Map();
+  const itemMap = new Map();
+
+  Object.entries(payload.priceMap || {}).forEach(([id, value]) => {
+    const normalizedId = normalizeId(id);
+    priceMap.set(normalizedId, value);
+  });
+  Object.entries(payload.iconMap || {}).forEach(([id, value]) => {
+    const normalizedId = normalizeId(id);
+    iconMap.set(normalizedId, value ?? null);
+  });
+  Object.entries(payload.rarityMap || {}).forEach(([id, value]) => {
+    const normalizedId = normalizeId(id);
+    rarityMap.set(normalizedId, value ?? null);
+  });
+  Object.entries(payload.itemMap || {}).forEach(([id, value]) => {
+    const normalizedId = normalizeId(id);
+    if (value && typeof value === 'object') {
+      itemMap.set(normalizedId, value);
+    } else {
+      itemMap.set(normalizedId, null);
+    }
+  });
+
+  return { priceMap, iconMap, rarityMap, itemMap };
+}
+
+export default async function fetchAggregateBundle(ids = [], options = {}) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return {
+      priceMap: new Map(),
+      iconMap: new Map(),
+      rarityMap: new Map(),
+      itemMap: new Map(),
+      meta: null,
+    };
+  }
+
+  const {
+    iconCache,
+    rarityCache,
+    itemCache,
+    fields,
+    page,
+    pageSize,
+    signal,
+  } = options || {};
+
+  const config = getConfig();
+  const baseUrl = config?.API_BASE_URL || '/api';
+  const defaultLang = options.lang || config?.DEFAULT_LANG || 'es';
+
+  const params = new URLSearchParams();
+  const normalizedIds = ids
+    .map((value) => normalizeId(value))
+    .filter((value) => {
+      if (value == null || value === '') {
+        return false;
+      }
+      if (Number.isFinite(value)) {
+        return value > 0;
+      }
+      const text = String(value).trim();
+      return Boolean(text);
+    });
+  normalizedIds.forEach((id) => {
+    params.append('ids[]', String(id));
+  });
+  if (normalizedIds.length > 0) {
+    params.set('ids', normalizedIds.join(','));
+  }
+  params.set('lang', String(defaultLang));
+  const normalizedFields = normalizeFields(fields);
+  if (normalizedFields) {
+    params.set('fields', normalizedFields);
+  }
+  if (page != null) {
+    params.set('page', String(page));
+  }
+  if (pageSize != null) {
+    params.set('pageSize', String(pageSize));
+  }
+
+  const requestUrl = `${joinApiPath(baseUrl, '/aggregate/bundle')}?${params.toString()}`;
+
+  try {
+    return await fetchAggregateFromApi({
+      requestUrl,
+      signal,
+      fields,
+      normalizedIds,
+      iconCache,
+      rarityCache,
+      itemCache,
+    });
+  } catch (error) {
+    if (error?.code === 'AGGREGATE_INCOMPLETE') {
+      throw error;
+    }
+
+    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('[aggregateBundle] API fallback for aggregate bundle', error);
+    }
+
+    const fallbackPayload = await buildLegacyAggregatePayload(normalizedIds, {
+      lang: defaultLang,
+    });
+    const maps = convertLegacyPayloadToMaps(fallbackPayload);
+    emitCacheMetric('miss');
+    return {
+      ...maps,
+      meta: fallbackPayload.meta,
+    };
+  }
 }

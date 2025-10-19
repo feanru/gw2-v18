@@ -169,28 +169,68 @@ async function testIconFallbackUsesString() {
   });
 }
 
-async function testInvalidResponseThrows() {
+async function testInvalidResponseFallsBack() {
   const suffix = getFreshModuleId('error');
-  await withPatchedFetch(async () => ({
-    ok: false,
-    status: 503,
-    headers: {
-      get() {
-        return 'application/json';
-      },
-    },
-  }), async () => {
+  await withPatchedFetch(async (url) => {
+    const urlString = String(url);
+    if (urlString.includes('/aggregate/bundle')) {
+      return {
+        ok: false,
+        status: 503,
+        headers: {
+          get() {
+            return 'application/json';
+          },
+        },
+      };
+    }
+    if (urlString.includes('/api/items/bundle')) {
+      return {
+        ok: false,
+        status: 502,
+        headers: {
+          get() {
+            return 'application/json';
+          },
+        },
+      };
+    }
+    if (urlString.includes('/backend/api/dataBundle.php')) {
+      const payload = {
+        data: [
+          {
+            id: 10,
+            item: { id: 10, name: 'Fallback Item', icon: 'file/fallback.png', rarity: 'Raro' },
+            market: { buy_price: 100, sell_price: 150 },
+            extra: { last_updated: 1_700_000_000 },
+          },
+        ],
+        meta: { source: 'fallback', stale: false },
+      };
+      return {
+        ok: true,
+        headers: {
+          get() {
+            return 'application/json';
+          },
+        },
+        async json() {
+          return payload;
+        },
+      };
+    }
+    throw new Error(`Unexpected URL ${urlString}`);
+  }, async () => {
     const module = await importService(suffix);
     const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
     await __resetDonesAggregateCacheForTests();
-    let threw = false;
-    try {
-      await fetchDonesAggregate([10]);
-    } catch (err) {
-      threw = true;
-      assert.match(String(err?.message || err), /503/);
-    }
-    assert.equal(threw, true, 'Debe propagar errores HTTP');
+    const result = await fetchDonesAggregate([10]);
+    assert.equal(result.ok, true, 'Debe completar el fallback correctamente');
+    const entry = result.itemsMap.get(10);
+    assert.equal(entry?.name, 'Fallback Item', 'Debe propagar el ítem del fallback');
+    assert.equal(result.pricesMap.get(10)?.buy_price, 100, 'Debe normalizar los precios del fallback');
+    assert.equal(result.meta?.source, 'fallback', 'La metadata debe indicar el origen de fallback');
+    assert.ok(result.meta?.stale, 'El fallback debe marcarse como stale');
   });
 }
 
@@ -407,7 +447,7 @@ async function run() {
   await testCacheReuse();
   await testPartialResponse();
   await testIconFallbackUsesString();
-  await testInvalidResponseThrows();
+  await testInvalidResponseFallsBack();
   await testTtlRefresh();
   await testTtlRefreshWithMissingIds();
   await testPaginationRequests();
