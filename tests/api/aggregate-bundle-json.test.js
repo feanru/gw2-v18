@@ -225,9 +225,74 @@ async function testAggregateFallback() {
   assert.strictEqual(dataSourceHeader, 'fallback');
 }
 
+async function testAggregatePaginationAndFields() {
+  const aggregates = new Map([
+    [
+      1,
+      {
+        data: {
+          item: { id: 1, name: 'Uno' },
+          totals: { unitBuyPrice: 111, unitSellPrice: 222 },
+        },
+        meta: { snapshotAt: '2024-01-01T00:00:00.000Z', stale: false },
+      },
+    ],
+    [
+      2,
+      {
+        data: {
+          item: { id: 2, name: 'Dos' },
+          totals: { unitBuyPrice: 333, unitSellPrice: 444 },
+        },
+        meta: { snapshotAt: '2024-01-02T00:00:00.000Z', stale: false },
+      },
+    ],
+    [
+      3,
+      {
+        data: {
+          item: { id: 3, name: 'Tres' },
+          totals: { unitBuyPrice: 555, unitSellPrice: 666 },
+        },
+        meta: { snapshotAt: '2024-01-03T00:00:00.000Z', stale: false },
+      },
+    ],
+  ]);
+
+  api.__setAggregateOverrides({
+    async getCachedAggregate(itemId) {
+      return aggregates.get(itemId) || null;
+    },
+    async buildItemAggregate(itemId) {
+      return aggregates.get(itemId) || null;
+    },
+  });
+
+  const request = createRequest('/api/aggregate/bundle?ids=1,2,3&lang=es&page=2&pageSize=1&fields=priceMap,iconMap');
+  const response = createMockResponse();
+
+  try {
+    await api.handleApiRequest(request, response);
+  } finally {
+    api.__resetAggregateOverrides();
+  }
+
+  assert.strictEqual(response.statusCode, 200);
+  const payload = JSON.parse(response.body);
+  assert.ok(payload.priceMap);
+  assert.deepStrictEqual(Object.keys(payload.priceMap), ['2']);
+  assert.ok(!Object.prototype.hasOwnProperty.call(payload, 'rarityMap'), 'rarityMap should be filtered');
+  assert.ok(!Object.prototype.hasOwnProperty.call(payload, 'itemMap'), 'itemMap should be filtered');
+  assert.strictEqual(payload.meta.pagination.page, 2);
+  assert.strictEqual(payload.meta.pagination.pageSize, 1);
+  assert.strictEqual(payload.meta.pagination.totalIds, 3);
+  assert.strictEqual(payload.meta.pagination.hasNext, true);
+}
+
 async function run() {
   await testAggregateSuccess();
   await testAggregateFallback();
+  await testAggregatePaginationAndFields();
   console.log('tests/api/aggregate-bundle-json.test.js passed');
 }
 

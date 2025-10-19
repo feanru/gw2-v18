@@ -20,7 +20,7 @@ async function run() {
   assert.equal(defaultsConfig.LANG, 'es');
   assert.equal(defaultsConfig.priceCacheStrategy, 'sessionStorage');
   assert.equal(defaultsConfig.FEATURE_USE_PRECOMPUTED, false);
-  assert.equal(defaultsConfig.FETCH_GUARD_MODE, 'report-only');
+  assert.equal(defaultsConfig.FETCH_GUARD_MODE, 'enforce');
   assert.deepEqual(defaultsConfig.CONNECT_ALLOWLIST, []);
   assert.notEqual(defaultsConfig.CONNECT_ALLOWLIST, defaultsModule.DEFAULT_CONFIG.CONNECT_ALLOWLIST);
   assert.equal(defaultsConfig.FETCH_GUARD_REPORT_URL, null);

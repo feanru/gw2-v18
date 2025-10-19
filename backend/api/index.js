@@ -2887,7 +2887,7 @@ function mergeAggregateMeta(cachedMeta, overrides = {}) {
   return { meta, errors };
 }
 
-async function handleGetAggregate(req, res, itemId, lang) {
+async function handleGetAggregate(req, res, itemId, lang, url) {
   const start = process.hrtime.bigint();
   let statusCode = 200;
   let stale = false;
@@ -2901,6 +2901,7 @@ async function handleGetAggregate(req, res, itemId, lang) {
   let snapshotTtlMs = null;
   let cacheAgeMs = null;
   let cacheStoredAt = null;
+  const fields = aggregateHelpers.parseAggregateFields(url?.searchParams?.get('fields'));
   try {
     const cacheLookupStart = process.hrtime.bigint();
     cached = await getCachedAggregateFn(itemId, lang);
@@ -2944,17 +2945,19 @@ async function handleGetAggregate(req, res, itemId, lang) {
       if (ttlMs != null) {
         snapshotTtlMs = ttlMs;
       }
+      const filteredData = aggregateHelpers.filterAggregateData(cached.data, fields);
+      const hasData = Object.keys(filteredData || {}).length > 0;
       if (
         shouldSendNotModified(req, headers, snapshotIso, {
           stale,
-          hasData: Boolean(cached.data),
+          hasData,
         })
       ) {
         statusCode = 304;
         writeNotModified(res, headers);
         return;
       }
-      ok(res, cached.data, meta, { errors, headers });
+      ok(res, filteredData, meta, { errors, headers });
       statusCode = 200;
       return;
     }
@@ -3007,17 +3010,19 @@ async function handleGetAggregate(req, res, itemId, lang) {
       if (ttlMs != null) {
         snapshotTtlMs = ttlMs;
       }
+      const filteredData = aggregateHelpers.filterAggregateData(built.data, fields);
+      const hasData = Object.keys(filteredData || {}).length > 0;
       if (
         shouldSendNotModified(req, headers, snapshotIso, {
           stale: false,
-          hasData: Boolean(built.data),
+          hasData,
         })
       ) {
         statusCode = 304;
         writeNotModified(res, headers);
         return;
       }
-      ok(res, built.data, meta, { errors, headers });
+      ok(res, filteredData, meta, { errors, headers });
       statusCode = 200;
       return;
     }
@@ -3330,7 +3335,32 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     return;
   }
 
-  const aggregateResult = await aggregateHelpers.resolveAggregateEntries(ids, {
+  const fields = aggregateHelpers.parseBundleFields(url.searchParams.get('fields'));
+  const { ids: pagedIds, pagination } = aggregateHelpers.paginateIds(ids, {
+    page: url.searchParams.get('page'),
+    pageSize: url.searchParams.get('pageSize'),
+  });
+
+  if (pagedIds.length === 0) {
+    const { meta } = aggregateHelpers.buildAggregateMeta({
+      lang,
+      source: 'aggregate',
+      stale: false,
+    });
+    const enrichedMeta = { ...meta, pagination };
+    const emptyPayload = aggregateHelpers.filterAggregateBundlePayload(
+      { priceMap: {}, iconMap: {}, rarityMap: {}, meta: enrichedMeta },
+      fields,
+    );
+    sendAggregateBundleResponse(res, emptyPayload, {
+      statusCode: 200,
+      cacheControl: 'public, max-age=0, must-revalidate',
+      dataSource: enrichedMeta.source,
+    });
+    return;
+  }
+
+  const aggregateResult = await aggregateHelpers.resolveAggregateEntries(pagedIds, {
     lang,
     getCachedAggregate: getCachedAggregateFn,
     buildItemAggregate: buildItemAggregateFn,
@@ -3351,32 +3381,39 @@ async function handleAggregateBundleJson(req, res, url, lang) {
       errors: aggregateResult.errors,
       snapshot: aggregateResult.snapshot,
     });
-    const payload = { priceMap, iconMap, rarityMap, meta };
+    const enrichedMeta = { ...meta, pagination };
+    const payload = aggregateHelpers.filterAggregateBundlePayload(
+      { priceMap, iconMap, rarityMap, meta: enrichedMeta },
+      fields,
+    );
     if (errors.length > 0) {
       payload.errors = errors;
     }
     sendAggregateBundleResponse(res, payload, {
       statusCode: 200,
       cacheControl: `public, max-age=${CACHE_TTL_FAST_SECONDS}, stale-while-revalidate=${CACHE_TTL_FAST_SECONDS}`,
-      dataSource: meta.source,
+      dataSource: enrichedMeta.source,
     });
     return;
   }
 
-  const fallbackResult = await fetchLegacyBundlePayload(ids, lang);
+  const fallbackResult = await fetchLegacyBundlePayload(pagedIds, lang);
   const fallbackPayload = fallbackResult.payload;
 
   if (!fallbackPayload || fallbackResult.statusCode >= 400) {
-    const meta = { lang, source: 'aggregate', stale: true };
-    const payload = {
-      priceMap: {},
-      iconMap: {},
-      rarityMap: {},
-      meta,
-      errors: [
-        { code: 'aggregate_failed', msg: 'Aggregate snapshot not available' },
-      ],
-    };
+    const meta = { lang, source: 'aggregate', stale: true, pagination };
+    const payload = aggregateHelpers.filterAggregateBundlePayload(
+      {
+        priceMap: {},
+        iconMap: {},
+        rarityMap: {},
+        meta,
+        errors: [
+          { code: 'aggregate_failed', msg: 'Aggregate snapshot not available' },
+        ],
+      },
+      fields,
+    );
     sendAggregateBundleResponse(res, payload, {
       statusCode: fallbackResult.statusCode >= 400 ? fallbackResult.statusCode : 502,
       cacheControl: 'no-store, no-cache, must-revalidate',
@@ -3389,11 +3426,11 @@ async function handleAggregateBundleJson(req, res, url, lang) {
   const snapshotValue =
     fallbackMeta.snapshotAt ?? fallbackMeta.generatedAt ?? fallbackMeta.lastUpdated ?? null;
   const fallbackEntries = aggregateHelpers.createEntriesFromBundleData(
-    ids,
+    pagedIds,
     fallbackPayload.data || {},
   );
   const { priceMap, iconMap, rarityMap } = aggregateHelpers.buildMapsFromEntries(
-    ids,
+    pagedIds,
     fallbackEntries,
   );
   const { meta, errors } = aggregateHelpers.buildAggregateMeta({
@@ -3404,7 +3441,11 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     errors: fallbackPayload.errors,
     snapshot: snapshotValue,
   });
-  const payload = { priceMap, iconMap, rarityMap, meta };
+  const enrichedMeta = { ...meta, pagination };
+  const payload = aggregateHelpers.filterAggregateBundlePayload(
+    { priceMap, iconMap, rarityMap, meta: enrichedMeta },
+    fields,
+  );
   if (errors.length > 0) {
     payload.errors = errors;
   }
@@ -3415,7 +3456,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     cacheControl:
       fallbackCacheControl ||
       `public, max-age=${CACHE_TTL_FAST_SECONDS}, stale-while-revalidate=${CACHE_TTL_FAST_SECONDS}`,
-    dataSource: meta.source,
+    dataSource: enrichedMeta.source,
   });
 }
 
@@ -3494,7 +3535,7 @@ async function handleApiRequest(req, res) {
       );
       return;
     }
-    await handleGetAggregate(req, res, itemId, lang);
+    await handleGetAggregate(req, res, itemId, lang, url);
     return;
   }
 
