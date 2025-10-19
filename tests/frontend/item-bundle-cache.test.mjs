@@ -20,6 +20,9 @@ function createResponse({ status = 200, ok = true, body = {}, headers = {} } = {
     async json() {
       return body;
     },
+    async text() {
+      return JSON.stringify(body);
+    },
   };
 }
 
