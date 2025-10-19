@@ -1,4 +1,5 @@
 import fetchWithRetry from './fetchWithRetry.js';
+import { getConfig } from '../config.js';
 
 function emitCacheMetric(metric) {
   if (typeof window === 'undefined' || !window) {
@@ -63,6 +64,19 @@ function toFieldSet(fields) {
   return set;
 }
 
+function joinApiPath(baseUrl, path) {
+  const base = typeof baseUrl === 'string' ? baseUrl.trim() : '';
+  const trimmedBase = base.replace(/\/+$/, '');
+  const normalizedPath = String(path || '').replace(/^\/+/, '');
+  if (!trimmedBase) {
+    return `/${normalizedPath}`;
+  }
+  if (!normalizedPath) {
+    return trimmedBase || '/';
+  }
+  return `${trimmedBase}/${normalizedPath}`;
+}
+
 export default async function fetchAggregateBundle(ids = [], options = {}) {
   if (!Array.isArray(ids) || ids.length === 0) {
     return {
@@ -84,7 +98,30 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     signal,
   } = options || {};
 
-  const params = new URLSearchParams({ ids: ids.join(','), lang: 'es' });
+  const config = getConfig();
+  const baseUrl = config?.API_BASE_URL || '/api';
+  const defaultLang = options.lang || config?.DEFAULT_LANG || 'es';
+
+  const params = new URLSearchParams();
+  const normalizedIds = ids
+    .map((value) => normalizeId(value))
+    .filter((value) => {
+      if (value == null || value === '') {
+        return false;
+      }
+      if (Number.isFinite(value)) {
+        return value > 0;
+      }
+      const text = String(value).trim();
+      return Boolean(text);
+    });
+  normalizedIds.forEach((id) => {
+    params.append('ids[]', String(id));
+  });
+  if (normalizedIds.length > 0) {
+    params.set('ids', normalizedIds.map((id) => String(id)).join(','));
+  }
+  params.set('lang', String(defaultLang));
   const normalizedFields = normalizeFields(fields);
   if (normalizedFields) {
     params.set('fields', normalizedFields);
@@ -96,17 +133,29 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     params.set('pageSize', String(pageSize));
   }
 
-  const response = await fetchWithRetry(`/api/aggregate/bundle?${params.toString()}`, { signal });
+  const requestUrl = `${joinApiPath(baseUrl, '/aggregate/bundle')}?${params.toString()}`;
+  const response = await fetchWithRetry(requestUrl, {
+    signal,
+    headers: {
+      Accept: 'application/json, text/plain;q=0.9',
+    },
+  });
   if (!response.ok) {
     throw new Error(`Error ${response.status} al consultar el agregado de bundle`);
   }
 
   const contentType = response.headers.get('content-type') || '';
-  if (!contentType.includes('application/json')) {
-    throw new Error('Respuesta no válida del agregado de bundle');
+  const rawText = await response.text();
+  let payload = null;
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch (err) {
+      throw new Error(
+        `Datos no válidos del agregado de bundle (content-type: ${contentType || 'desconocido'})`,
+      );
+    }
   }
-
-  const payload = await response.json().catch(() => null);
   if (!payload || typeof payload !== 'object') {
     throw new Error('Datos no válidos del agregado de bundle');
   }
@@ -168,7 +217,9 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     });
   }
 
-  const normalizedIds = ids.map(normalizeId);
+  const normalizedIdsForValidation = normalizedIds.length > 0
+    ? normalizedIds
+    : ids.map((value) => normalizeId(value));
   const hasErrors = Array.isArray(payload.errors)
     ? payload.errors.length > 0
     : Boolean(payload.errors);
@@ -178,7 +229,7 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
   const expectRarityMap = !fieldSet || fieldSet.has('rarityMap');
   const expectItemMap = fieldSet ? fieldSet.has('itemMap') : false;
 
-  const missingIds = normalizedIds.filter((id) => {
+  const missingIds = normalizedIdsForValidation.filter((id) => {
     if (expectPriceMap && !priceMap.has(id)) return true;
     if (expectIconMap && !iconMap.has(id)) return true;
     if (expectRarityMap && !rarityMap.has(id)) return true;

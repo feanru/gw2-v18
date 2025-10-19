@@ -35,6 +35,25 @@ async function testCacheReuse() {
     if (!urlString.startsWith('/api/aggregate/bundle')) {
       throw new Error(`Unexpected URL ${urlString}`);
     }
+    const payload = {
+      priceMap: {
+        1: { buy_price: 101, sell_price: 202 },
+        2: { buy_price: 303, sell_price: 404 },
+      },
+      iconMap: {
+        1: 'https://cdn.test/icon-1.png',
+        2: 'https://cdn.test/icon-2.png',
+      },
+      rarityMap: {
+        1: 'Legendario',
+        2: 'Exótico',
+      },
+      itemMap: {
+        1: { id: 1, name: 'Uno', icon: 'https://cdn.test/icon-1.png', rarity: 'Legendario' },
+        2: { id: 2, name: 'Dos', icon: 'https://cdn.test/icon-2.png', rarity: 'Exótico' },
+      },
+      meta: { source: 'aggregate', stale: false, warnings: [] },
+    };
     return {
       ok: true,
       headers: {
@@ -42,26 +61,8 @@ async function testCacheReuse() {
           return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
       },
-      async json() {
-        return {
-          priceMap: {
-            1: { buy_price: 101, sell_price: 202 },
-            2: { buy_price: 303, sell_price: 404 },
-          },
-          iconMap: {
-            1: 'https://cdn.test/icon-1.png',
-            2: 'https://cdn.test/icon-2.png',
-          },
-          rarityMap: {
-            1: 'Legendario',
-            2: 'Exótico',
-          },
-          itemMap: {
-            1: { id: 1, name: 'Uno', icon: 'https://cdn.test/icon-1.png', rarity: 'Legendario' },
-            2: { id: 2, name: 'Dos', icon: 'https://cdn.test/icon-2.png', rarity: 'Exótico' },
-          },
-          meta: { source: 'aggregate', stale: false, warnings: [] },
-        };
+      async text() {
+        return JSON.stringify(payload);
       },
     };
   }, async () => {
@@ -91,28 +92,31 @@ async function testCacheReuse() {
 
 async function testPartialResponse() {
   const suffix = getFreshModuleId('partial');
-  await withPatchedFetch(async () => ({
-    ok: true,
-    headers: {
-      get(name) {
-        return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
+  await withPatchedFetch(async () => {
+    const payload = {
+      priceMap: {
+        5: { buy_price: 500, sell_price: 600 },
       },
-    },
-    async json() {
-      return {
-        priceMap: {
-          5: { buy_price: 500, sell_price: 600 },
+      iconMap: {
+        5: 'https://cdn.test/icon-5.png',
+      },
+      rarityMap: {
+        5: 'Raro',
+      },
+      meta: { source: 'aggregate', stale: false, warnings: [] },
+    };
+    return {
+      ok: true,
+      headers: {
+        get(name) {
+          return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
-        iconMap: {
-          5: 'https://cdn.test/icon-5.png',
-        },
-        rarityMap: {
-          5: 'Raro',
-        },
-        meta: { source: 'aggregate', stale: false, warnings: [] },
-      };
-    },
-  }), async () => {
+      },
+      async text() {
+        return JSON.stringify(payload);
+      },
+    };
+  }, async () => {
     const module = await importService(suffix);
     const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
     await __resetDonesAggregateCacheForTests();
@@ -126,27 +130,30 @@ async function testPartialResponse() {
 async function testIconFallbackUsesString() {
   const suffix = getFreshModuleId('icon-fallback');
   const expectedIcon = 'https://cdn.test/icon-77.png';
-  await withPatchedFetch(async () => ({
-    ok: true,
-    headers: {
-      get(name) {
-        return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
+  await withPatchedFetch(async () => {
+    const payload = {
+      priceMap: {},
+      iconMap: {
+        77: expectedIcon,
       },
-    },
-    async json() {
-      return {
-        priceMap: {},
-        iconMap: {
-          77: expectedIcon,
+      rarityMap: {},
+      itemMap: {
+        77: { id: 77, name: 'Setenta y siete' },
+      },
+      meta: { source: 'aggregate', stale: false, warnings: [] },
+    };
+    return {
+      ok: true,
+      headers: {
+        get(name) {
+          return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
-        rarityMap: {},
-        itemMap: {
-          77: { id: 77, name: 'Setenta y siete' },
-        },
-        meta: { source: 'aggregate', stale: false, warnings: [] },
-      };
-    },
-  }), async () => {
+      },
+      async text() {
+        return JSON.stringify(payload);
+      },
+    };
+  }, async () => {
     const module = await importService(suffix);
     const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
     await __resetDonesAggregateCacheForTests();
@@ -215,8 +222,8 @@ async function testTtlRefresh() {
           return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
       },
-      async json() {
-        return payload;
+      async text() {
+        return JSON.stringify(payload);
       },
     };
   }, async () => {
@@ -282,8 +289,8 @@ async function testTtlRefreshWithMissingIds() {
           return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
       },
-      async json() {
-        return payload;
+      async text() {
+        return JSON.stringify(payload);
       },
     };
   }, async () => {
@@ -319,6 +326,25 @@ async function testPaginationRequests() {
     assert.ok(fieldsParam && fieldsParam.includes('priceMap'), 'Debe solicitar campos específicos');
     assert.equal(pageSize, 1, 'Debe respetar el pageSize solicitado');
     if (page === 1) {
+      const payload = {
+        priceMap: { 1: { buy_price: 101, sell_price: 202 } },
+        iconMap: { 1: 'https://cdn.test/icon-1.png' },
+        rarityMap: { 1: 'Legendario' },
+        itemMap: { 1: { id: 1, name: 'Uno' } },
+        meta: {
+          source: 'aggregate',
+          stale: false,
+          warnings: [],
+          pagination: {
+            page: 1,
+            pageSize: 1,
+            totalIds: 2,
+            totalPages: 2,
+            hasNext: true,
+            hasPrev: false,
+          },
+        },
+      };
       return {
         ok: true,
         headers: {
@@ -326,30 +352,31 @@ async function testPaginationRequests() {
             return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
           },
         },
-        async json() {
-          return {
-            priceMap: { 1: { buy_price: 101, sell_price: 202 } },
-            iconMap: { 1: 'https://cdn.test/icon-1.png' },
-            rarityMap: { 1: 'Legendario' },
-            itemMap: { 1: { id: 1, name: 'Uno' } },
-            meta: {
-              source: 'aggregate',
-              stale: false,
-              warnings: [],
-              pagination: {
-                page: 1,
-                pageSize: 1,
-                totalIds: 2,
-                totalPages: 2,
-                hasNext: true,
-                hasPrev: false,
-              },
-            },
-          };
+        async text() {
+          return JSON.stringify(payload);
         },
       };
     }
     if (page === 2) {
+      const payload = {
+        priceMap: { 2: { buy_price: 303, sell_price: 404 } },
+        iconMap: { 2: 'https://cdn.test/icon-2.png' },
+        rarityMap: { 2: 'Exótico' },
+        itemMap: { 2: { id: 2, name: 'Dos' } },
+        meta: {
+          source: 'aggregate',
+          stale: false,
+          warnings: [],
+          pagination: {
+            page: 2,
+            pageSize: 1,
+            totalIds: 2,
+            totalPages: 2,
+            hasNext: false,
+            hasPrev: true,
+          },
+        },
+      };
       return {
         ok: true,
         headers: {
@@ -357,26 +384,8 @@ async function testPaginationRequests() {
             return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
           },
         },
-        async json() {
-          return {
-            priceMap: { 2: { buy_price: 303, sell_price: 404 } },
-            iconMap: { 2: 'https://cdn.test/icon-2.png' },
-            rarityMap: { 2: 'Exótico' },
-            itemMap: { 2: { id: 2, name: 'Dos' } },
-            meta: {
-              source: 'aggregate',
-              stale: false,
-              warnings: [],
-              pagination: {
-                page: 2,
-                pageSize: 1,
-                totalIds: 2,
-                totalPages: 2,
-                hasNext: false,
-                hasPrev: true,
-              },
-            },
-          };
+        async text() {
+          return JSON.stringify(payload);
         },
       };
     }

@@ -153,7 +153,7 @@ async function testAggregateSuccess() {
     },
   });
 
-  const request = createRequest('/api/aggregate/bundle?ids=1,2&lang=es');
+  const request = createRequest('/api/aggregate/bundle?ids[]=1&ids[]=2&lang=es');
   const response = createMockResponse();
 
   try {
@@ -201,7 +201,7 @@ async function testAggregateFallback() {
 
   api.__setLegacyOverrides({ fetchImpl, config });
 
-  const request = createRequest('/api/aggregate/bundle?ids=1,2&lang=es');
+  const request = createRequest('/api/aggregate/bundle?ids[]=1&ids[]=2&lang=es');
   const response = createMockResponse();
 
   try {
