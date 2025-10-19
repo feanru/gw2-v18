@@ -1,6 +1,8 @@
 import fetchWithRetry from '../utils/fetchWithRetry.js';
 
 const DEFAULT_TTL = 2 * 60 * 1000; // 2 minutos
+const DEFAULT_PAGE_SIZE = 50;
+const DEFAULT_FIELDS = ['priceMap', 'iconMap', 'rarityMap', 'itemMap'];
 
 const aggregateState = {
   items: new Map(),
@@ -64,6 +66,15 @@ async function requestAggregate(ids, options = {}) {
   const params = new URLSearchParams();
   params.set('ids', ids.join(','));
   params.set('lang', 'es');
+  if (Array.isArray(options.fields) && options.fields.length > 0) {
+    params.set('fields', options.fields.join(','));
+  }
+  if (Number.isFinite(Number(options.page)) && Number(options.page) > 0) {
+    params.set('page', Math.floor(Number(options.page)));
+  }
+  if (Number.isFinite(Number(options.pageSize)) && Number(options.pageSize) > 0) {
+    params.set('pageSize', Math.floor(Number(options.pageSize)));
+  }
   const response = await fetchWithRetry(`/api/aggregate/bundle?${params.toString()}`, {
     signal: options.signal,
   });
@@ -137,7 +148,89 @@ export async function fetchDonesAggregate(rawIds = [], options = {}) {
   }
 
   const idsToFetch = cacheExpired ? ids : missingFromCache;
-  const payload = await requestAggregate(idsToFetch, options);
+  const requestedFields = Array.isArray(options.fields) && options.fields.length > 0
+    ? options.fields
+    : DEFAULT_FIELDS;
+  const pageSize = Number.isFinite(Number(options.pageSize)) && Number(options.pageSize) > 0
+    ? Math.floor(Number(options.pageSize))
+    : DEFAULT_PAGE_SIZE;
+
+  const collectedPayloads = [];
+  let currentPage = 1;
+  let totalPages = 1;
+  do {
+    const payload = await requestAggregate(idsToFetch, {
+      signal: options.signal,
+      page: currentPage,
+      pageSize,
+      fields: requestedFields,
+    });
+    collectedPayloads.push(payload);
+    const pagination = payload?.meta?.pagination || null;
+    if (pagination && Number.isFinite(Number(pagination.totalPages))) {
+      totalPages = Math.max(1, Number(pagination.totalPages));
+    }
+    if (!pagination || !pagination.hasNext) {
+      break;
+    }
+    const nextPage = Number.isFinite(Number(pagination.page))
+      ? Number(pagination.page) + 1
+      : currentPage + 1;
+    if (nextPage <= currentPage || nextPage > totalPages) {
+      break;
+    }
+    currentPage = nextPage;
+  } while (currentPage <= totalPages);
+
+  const combinedPriceMap = {};
+  const combinedIconMap = {};
+  const combinedRarityMap = {};
+  const combinedItemMap = {};
+  const combinedErrors = [];
+  const combinedWarnings = new Set();
+  let latestMeta = null;
+
+  collectedPayloads.forEach((payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+    if (payload.priceMap && typeof payload.priceMap === 'object') {
+      Object.assign(combinedPriceMap, payload.priceMap);
+    }
+    if (payload.iconMap && typeof payload.iconMap === 'object') {
+      Object.assign(combinedIconMap, payload.iconMap);
+    }
+    if (payload.rarityMap && typeof payload.rarityMap === 'object') {
+      Object.assign(combinedRarityMap, payload.rarityMap);
+    }
+    if (payload.itemMap && typeof payload.itemMap === 'object') {
+      Object.assign(combinedItemMap, payload.itemMap);
+    }
+    if (Array.isArray(payload.errors)) {
+      payload.errors.forEach((entry) => combinedErrors.push(entry));
+    } else if (payload.errors) {
+      combinedErrors.push(payload.errors);
+    }
+    const meta = payload.meta || null;
+    if (meta) {
+      latestMeta = meta;
+      if (Array.isArray(meta.warnings)) {
+        meta.warnings.filter(Boolean).forEach((warning) => combinedWarnings.add(warning));
+      }
+    }
+  });
+
+  const payload = {
+    priceMap: combinedPriceMap,
+    iconMap: combinedIconMap,
+    rarityMap: combinedRarityMap,
+    itemMap: combinedItemMap,
+    meta: latestMeta || null,
+    errors: combinedErrors,
+  };
+  if (payload.meta && combinedWarnings.size > 0) {
+    payload.meta = { ...payload.meta, warnings: Array.from(combinedWarnings) };
+  }
 
   const iconMap = objectToMap(payload.iconMap, (key, value) => {
     const id = normalizeId(key);

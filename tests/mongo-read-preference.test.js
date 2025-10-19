@@ -42,6 +42,54 @@ const dataset = {
 
 const observedOptions = [];
 
+const workerThreadsPath = require.resolve('worker_threads');
+
+class InlineMockWorker {
+  constructor(filename, options = {}) {
+    this.filename = filename;
+    this.options = options;
+    this.listeners = new Map();
+    setImmediate(async () => {
+      const { runBuild } = require('../backend/aggregates/buildWorker.js');
+      try {
+        const payload = await runBuild(options.workerData);
+        this.emit('message', { ok: true, payload });
+        this.emit('exit', 0);
+      } catch (err) {
+        this.emit('message', {
+          ok: false,
+          error: { message: err?.message || 'inline worker error', code: err?.code },
+        });
+        this.emit('error', err);
+        this.emit('exit', 1);
+      }
+    });
+  }
+
+  once(event, handler) {
+    this.listeners.set(event, handler);
+  }
+
+  emit(event, value) {
+    const handler = this.listeners.get(event);
+    if (!handler) {
+      return;
+    }
+    this.listeners.delete(event);
+    handler(value);
+  }
+
+  terminate() {
+    return Promise.resolve();
+  }
+
+  removeAllListeners() {
+    this.listeners.clear();
+  }
+}
+
+require.cache[workerThreadsPath] = { exports: { Worker: InlineMockWorker } };
+
 async function runScenario({ preference, expected }) {
   observedOptions.length = 0;
 
