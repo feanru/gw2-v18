@@ -5,18 +5,74 @@ function normalizeId(value) {
   return Number.isFinite(numeric) ? numeric : value;
 }
 
-export default async function fetchAggregateBundle(ids = [], caches = {}) {
+function normalizeFields(fields) {
+  if (!fields) {
+    return null;
+  }
+  if (Array.isArray(fields)) {
+    return fields
+      .map(field => String(field || '').trim())
+      .filter(Boolean)
+      .join(',');
+  }
+  if (typeof fields === 'string') {
+    return fields
+      .split(',')
+      .map(field => field.trim())
+      .filter(Boolean)
+      .join(',');
+  }
+  return null;
+}
+
+function toFieldSet(fields) {
+  const normalized = normalizeFields(fields);
+  if (!normalized) {
+    return null;
+  }
+  const set = new Set();
+  normalized.split(',').forEach(field => {
+    if (field) {
+      set.add(field);
+    }
+  });
+  return set;
+}
+
+export default async function fetchAggregateBundle(ids = [], options = {}) {
   if (!Array.isArray(ids) || ids.length === 0) {
     return {
       priceMap: new Map(),
       iconMap: new Map(),
       rarityMap: new Map(),
+      itemMap: new Map(),
       meta: null,
     };
   }
 
+  const {
+    iconCache,
+    rarityCache,
+    itemCache,
+    fields,
+    page,
+    pageSize,
+    signal,
+  } = options || {};
+
   const params = new URLSearchParams({ ids: ids.join(','), lang: 'es' });
-  const response = await fetchWithRetry(`/api/aggregate/bundle?${params.toString()}`);
+  const normalizedFields = normalizeFields(fields);
+  if (normalizedFields) {
+    params.set('fields', normalizedFields);
+  }
+  if (page != null) {
+    params.set('page', String(page));
+  }
+  if (pageSize != null) {
+    params.set('pageSize', String(pageSize));
+  }
+
+  const response = await fetchWithRetry(`/api/aggregate/bundle?${params.toString()}`, { signal });
   if (!response.ok) {
     throw new Error(`Error ${response.status} al consultar el agregado de bundle`);
   }
@@ -34,6 +90,7 @@ export default async function fetchAggregateBundle(ids = [], caches = {}) {
   const priceMap = new Map();
   const iconMap = new Map();
   const rarityMap = new Map();
+  const itemMap = new Map();
 
   if (payload.priceMap && typeof payload.priceMap === 'object') {
     Object.entries(payload.priceMap).forEach(([id, value]) => {
@@ -46,23 +103,36 @@ export default async function fetchAggregateBundle(ids = [], caches = {}) {
 
   if (payload.iconMap && typeof payload.iconMap === 'object') {
     Object.entries(payload.iconMap).forEach(([id, value]) => {
-      if (value) {
-        const normalizedId = normalizeId(id);
-        iconMap.set(normalizedId, value);
-        if (caches.iconCache && typeof caches.iconCache === 'object') {
-          caches.iconCache[normalizedId] = value;
-        }
+      const normalizedId = normalizeId(id);
+      iconMap.set(normalizedId, value ?? null);
+      if (iconCache && typeof iconCache === 'object') {
+        iconCache[normalizedId] = value ?? null;
       }
     });
   }
 
   if (payload.rarityMap && typeof payload.rarityMap === 'object') {
     Object.entries(payload.rarityMap).forEach(([id, value]) => {
-      if (value) {
-        const normalizedId = normalizeId(id);
-        rarityMap.set(normalizedId, value);
-        if (caches.rarityCache && typeof caches.rarityCache === 'object') {
-          caches.rarityCache[normalizedId] = value;
+      const normalizedId = normalizeId(id);
+      rarityMap.set(normalizedId, value ?? null);
+      if (rarityCache && typeof rarityCache === 'object') {
+        rarityCache[normalizedId] = value ?? null;
+      }
+    });
+  }
+
+  if (payload.itemMap && typeof payload.itemMap === 'object') {
+    Object.entries(payload.itemMap).forEach(([id, value]) => {
+      const normalizedId = normalizeId(id);
+      if (value && typeof value === 'object') {
+        itemMap.set(normalizedId, { ...value, id: normalizeId(value.id ?? normalizedId) });
+        if (itemCache && typeof itemCache === 'object') {
+          itemCache[normalizedId] = { ...value };
+        }
+      } else {
+        itemMap.set(normalizedId, null);
+        if (itemCache && typeof itemCache === 'object') {
+          itemCache[normalizedId] = null;
         }
       }
     });
@@ -72,9 +142,20 @@ export default async function fetchAggregateBundle(ids = [], caches = {}) {
   const hasErrors = Array.isArray(payload.errors)
     ? payload.errors.length > 0
     : Boolean(payload.errors);
-  const missingIds = normalizedIds.filter(
-    id => !priceMap.has(id) || !iconMap.has(id) || !rarityMap.has(id),
-  );
+  const fieldSet = toFieldSet(fields);
+  const expectPriceMap = !fieldSet || fieldSet.has('priceMap');
+  const expectIconMap = !fieldSet || fieldSet.has('iconMap');
+  const expectRarityMap = !fieldSet || fieldSet.has('rarityMap');
+  const expectItemMap = fieldSet ? fieldSet.has('itemMap') : false;
+
+  const missingIds = normalizedIds.filter((id) => {
+    if (expectPriceMap && !priceMap.has(id)) return true;
+    if (expectIconMap && !iconMap.has(id)) return true;
+    if (expectRarityMap && !rarityMap.has(id)) return true;
+    if (expectItemMap && !itemMap.has(id)) return true;
+    return false;
+  });
+
   if (hasErrors || missingIds.length > 0) {
     throw new Error('Datos incompletos del agregado de bundle');
   }
@@ -83,6 +164,7 @@ export default async function fetchAggregateBundle(ids = [], caches = {}) {
     priceMap,
     iconMap,
     rarityMap,
+    itemMap,
     meta: payload.meta || null,
   };
 }

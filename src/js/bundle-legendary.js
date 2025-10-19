@@ -2,6 +2,7 @@
 import { getCached, setCached, fetchDedup } from './utils/cache.js';
 import { getPrice, clearCache as clearPriceCache } from './utils/priceHelper.js';
 import { runCostsWorkerTask } from './workers/costsWorkerClient.js';
+import fetchAggregateBundle from './utils/fetchAggregateBundle.js';
 /**
  * Servicio para interactuar con la API de Guild Wars 2
  */
@@ -149,6 +150,153 @@ class GuildWars2API {
 }
 
 const gw2API = new GuildWars2API();
+
+function normalizeIcon(icon) {
+  if (!icon) return null;
+  if (typeof icon !== 'string') return null;
+  if (icon.startsWith('http') || icon.startsWith('//')) {
+    return icon;
+  }
+  const clean = icon.startsWith('file/') ? icon.slice(5) : icon;
+  const normalized = clean.startsWith('/') ? clean.slice(1) : clean;
+  return `https://render.guildwars2.com/file/${normalized}`;
+}
+
+const legendaryAggregateCache = {
+  prices: new Map(),
+  items: new Map(),
+  meta: null,
+};
+
+function getAggregatePrice(id) {
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) {
+    return null;
+  }
+  return legendaryAggregateCache.prices.get(numericId) || null;
+}
+
+function getAggregateItem(id) {
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) {
+    return null;
+  }
+  return legendaryAggregateCache.items.get(numericId) || null;
+}
+
+function clearLegendaryAggregateCache() {
+  legendaryAggregateCache.prices.clear();
+  legendaryAggregateCache.items.clear();
+  legendaryAggregateCache.meta = null;
+}
+
+function collectComponentIds(item, acc = new Set(), visited = new Set()) {
+  if (!item || typeof item !== 'object') {
+    return acc;
+  }
+  if (visited.has(item)) {
+    return acc;
+  }
+  visited.add(item);
+
+  if (item.id != null) {
+    const numericId = Number(item.id);
+    if (Number.isFinite(numericId) && numericId > 0) {
+      acc.add(numericId);
+    }
+  }
+
+  const children = Array.isArray(item.components) ? item.components : [];
+  children.forEach(child => collectComponentIds(child, acc, visited));
+
+  return acc;
+}
+
+async function preloadLegendaryAggregate(ids = []) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return;
+  }
+
+  const pending = ids
+    .map(id => Number(id))
+    .filter(id => Number.isFinite(id) && id > 0)
+    .filter(id => !legendaryAggregateCache.items.has(id) || !legendaryAggregateCache.prices.has(id));
+
+  if (pending.length === 0) {
+    return;
+  }
+
+  try {
+    const aggregate = await fetchAggregateBundle(pending, {
+      fields: 'priceMap,iconMap,rarityMap,itemMap',
+    });
+
+    aggregate.priceMap.forEach((value, id) => {
+      const numericId = Number(id);
+      const buy = Number.isFinite(value?.buy_price) ? value.buy_price : null;
+      const sell = Number.isFinite(value?.sell_price) ? value.sell_price : null;
+      legendaryAggregateCache.prices.set(numericId, { buy_price: buy, sell_price: sell });
+    });
+
+    pending.forEach((id) => {
+      if (!legendaryAggregateCache.items.has(id)) {
+        legendaryAggregateCache.items.set(id, { id });
+      }
+    });
+
+    if (aggregate.iconMap) {
+      aggregate.iconMap.forEach((icon, id) => {
+        const numericId = Number(id);
+        const existing = legendaryAggregateCache.items.get(numericId) || { id: numericId };
+        if (icon) {
+          existing.icon = normalizeIcon(icon);
+        }
+        legendaryAggregateCache.items.set(numericId, existing);
+      });
+    }
+
+    if (aggregate.rarityMap) {
+      aggregate.rarityMap.forEach((rarity, id) => {
+        const numericId = Number(id);
+        const existing = legendaryAggregateCache.items.get(numericId) || { id: numericId };
+        if (rarity) {
+          existing.rarity = rarity;
+        }
+        legendaryAggregateCache.items.set(numericId, existing);
+      });
+    }
+
+    if (aggregate.itemMap) {
+      aggregate.itemMap.forEach((item, id) => {
+        const numericId = Number(id);
+        const existing = legendaryAggregateCache.items.get(numericId) || { id: numericId };
+        if (item && typeof item === 'object') {
+          if (item.name && !existing.name) {
+            existing.name = item.name;
+          }
+          if (item.type && !existing.type) {
+            existing.type = item.type;
+          }
+          if (item.rarity) {
+            existing.rarity = item.rarity;
+          }
+          if (item.icon) {
+            existing.icon = normalizeIcon(item.icon);
+          }
+          if (item.level != null && !('level' in existing)) {
+            existing.level = item.level;
+          }
+        }
+        legendaryAggregateCache.items.set(numericId, existing);
+      });
+    }
+
+    legendaryAggregateCache.meta = aggregate.meta || legendaryAggregateCache.meta || null;
+  } catch (error) {
+    console.warn('[LegendaryCrafting] No se pudo precargar el agregado de bundle', error);
+  }
+}
+
 /**
  * Clase que representa un ingrediente en el árbol de crafteo
  */
@@ -412,36 +560,55 @@ class Ingredient {
 async function createIngredientTree1(itemData, parent = null) {
   if (!itemData) return null;
 
-  const apiDetails = await gw2API.getItemDetails(itemData.id);
+  let apiDetails = getAggregateItem(itemData.id);
+  if (!apiDetails) {
+    try {
+      apiDetails = await gw2API.getItemDetails(itemData.id);
+    } catch (error) {
+      console.warn(`[LegendaryCrafting] No se pudo obtener detalles para ${itemData.id}`, error);
+      apiDetails = null;
+    }
+  }
 
   // Crear el ingrediente con los datos básicos
   const ingredient = new Ingredient(
     itemData.id,
-    itemData.name,
-    itemData.type,
+    itemData.name || apiDetails?.name || `Item ${itemData.id}`,
+    itemData.type || apiDetails?.type || null,
     apiDetails?.rarity || itemData.rarity || null,
     itemData.count || 1,
     parent
   );
 
   // Copiar propiedades adicionales
-  if (itemData.icon) {
+  if (apiDetails?.icon) {
+    ingredient.icon = normalizeIcon(apiDetails.icon);
+  }
+
+  if (!ingredient.icon && itemData.icon) {
     // Si el icono ya es una URL completa, lo usamos directamente
     if (itemData.icon.startsWith('http') || itemData.icon.startsWith('//')) {
       ingredient.icon = itemData.icon;
-    } 
+    }
     // Si es una ruta relativa, la convertimos a URL completa
     else {
       // Aseguramos que no tenga el prefijo 'file/' duplicado
-      const cleanIconPath = itemData.icon.startsWith('file/') 
-        ? itemData.icon.substring(5) 
+      const cleanIconPath = itemData.icon.startsWith('file/')
+        ? itemData.icon.substring(5)
         : itemData.icon;
-      
+
       ingredient.icon = `https://render.guildwars2.com/file/${cleanIconPath}`;
     }
   }
-  
+
   if (itemData.source) ingredient.source = itemData.source;
+
+  const aggregatePrice = getAggregatePrice(ingredient.id);
+  if (aggregatePrice && (aggregatePrice.buy_price != null || aggregatePrice.sell_price != null)) {
+    const buy = Number.isFinite(aggregatePrice.buy_price) ? aggregatePrice.buy_price : 0;
+    const sell = Number.isFinite(aggregatePrice.sell_price) ? aggregatePrice.sell_price : 0;
+    ingredient.setPrices(buy, sell);
+  }
 
   // Lista de IDs que no deben buscar precios en el mercado
   // Se excluyen materiales de cuenta, no comerciables o con precios especiales
@@ -487,16 +654,20 @@ async function createIngredientTree1(itemData, parent = null) {
   if (ingredient.id === 19676) {
     // Precio fijo para 'Piedra rúnica helada': 1g (10000 cobre)
     ingredient.setPrices(10000, 10000);
-  } else if (isBasicMaterial(ingredient.id) && !shouldSkipMarketCheck(ingredient.id, ingredient.name)) {
-      try {
-        const prices = await getPrice(ingredient.id);
-        if (prices) {
-          ingredient.setPrices(prices.buy_price || 0, prices.sell_price || 0);
-        } else {
-          console.warn(`Precios no disponibles para ${ingredient.name} (${ingredient.id})`);
-          ingredient.setPrices(0, 0);
-        }
-      } catch (error) {
+  } else if (
+    isBasicMaterial(ingredient.id) &&
+    !shouldSkipMarketCheck(ingredient.id, ingredient.name) &&
+    !ingredient.isPriceLoaded()
+  ) {
+    try {
+      const prices = await getPrice(ingredient.id);
+      if (prices) {
+        ingredient.setPrices(prices.buy_price || 0, prices.sell_price || 0);
+      } else {
+        console.warn(`Precios no disponibles para ${ingredient.name} (${ingredient.id})`);
+        ingredient.setPrices(0, 0);
+      }
+    } catch (error) {
       // Si la API devuelve un error (por ejemplo, 404), asumimos que no hay precios
       console.warn(`Error al cargar precios para ${ingredient.name} (${ingredient.id}):`, error.message);
       ingredient.setPrices(0, 0);
@@ -568,36 +739,55 @@ async function runCostsWorker(tree, globalQty = 1) {
 async function createIngredientTree3(itemData, parent = null) {
   if (!itemData) return null;
 
-  const apiDetails = await gw2API.getItemDetails(itemData.id);
+  let apiDetails = getAggregateItem(itemData.id);
+  if (!apiDetails) {
+    try {
+      apiDetails = await gw2API.getItemDetails(itemData.id);
+    } catch (error) {
+      console.warn(`[LegendaryCrafting] No se pudo obtener detalles para ${itemData.id}`, error);
+      apiDetails = null;
+    }
+  }
 
   // Crear el ingrediente con los datos básicos
   const ingredient = new Ingredient(
     itemData.id,
-    itemData.name,
-    itemData.type,
+    itemData.name || apiDetails?.name || `Item ${itemData.id}`,
+    itemData.type || apiDetails?.type || null,
     apiDetails?.rarity || itemData.rarity || null,
     itemData.count || 1,
     parent
   );
 
   // Copiar propiedades adicionales
-  if (itemData.icon) {
+  if (apiDetails?.icon) {
+    ingredient.icon = normalizeIcon(apiDetails.icon);
+  }
+
+  if (!ingredient.icon && itemData.icon) {
     // Si el icono ya es una URL completa, lo usamos directamente
     if (itemData.icon.startsWith('http') || itemData.icon.startsWith('//')) {
       ingredient.icon = itemData.icon;
-    } 
+    }
     // Si es una ruta relativa, la convertimos a URL completa
     else {
       // Aseguramos que no tenga el prefijo 'file/' duplicado
-      const cleanIconPath = itemData.icon.startsWith('file/') 
-        ? itemData.icon.substring(5) 
+      const cleanIconPath = itemData.icon.startsWith('file/')
+        ? itemData.icon.substring(5)
         : itemData.icon;
-      
+
       ingredient.icon = `https://render.guildwars2.com/file/${cleanIconPath}`;
     }
   }
   
   if (itemData.source) ingredient.source = itemData.source;
+
+  const aggregatePrice = getAggregatePrice(ingredient.id);
+  if (aggregatePrice && (aggregatePrice.buy_price != null || aggregatePrice.sell_price != null)) {
+    const buy = Number.isFinite(aggregatePrice.buy_price) ? aggregatePrice.buy_price : 0;
+    const sell = Number.isFinite(aggregatePrice.sell_price) ? aggregatePrice.sell_price : 0;
+    ingredient.setPrices(buy, sell);
+  }
 
   // Lista de IDs que no deben buscar precios en el mercado
   const EXCLUDED_ITEM_IDS = [
@@ -690,9 +880,10 @@ async function createIngredientTree3(itemData, parent = null) {
   else if (ingredient.id === 92687 || ingredient.id === 96978) {
     const itemId = ingredient.id;
     const itemName = ingredient.name;
-    
-    
+
+
     // Forzar la carga de precios para este ítem
+    if (!ingredient.isPriceLoaded()) {
       try {
         const prices = await getPrice(itemId);
         if (prices) {
@@ -704,10 +895,15 @@ async function createIngredientTree3(itemData, parent = null) {
         console.warn(`[ERROR] Error al cargar precios para ${itemName}:`, error.message);
         ingredient.setPrices(0, 0);
       }
+    }
     return ingredient; // Retornar después del manejo personalizado
   }
   // Cargar precios para materiales básicos que no estén en la lista de exclusión
-  else if (isBasic3GenMaterial(ingredient.id) && !shouldSkipMarketCheck(ingredient.id, ingredient.name)) {
+  else if (
+    isBasic3GenMaterial(ingredient.id) &&
+    !shouldSkipMarketCheck(ingredient.id, ingredient.name) &&
+    !ingredient.isPriceLoaded()
+  ) {
     // Verificar si es un "Don de" o similar que no tiene precios en el mercado
     if (ingredient.name.toLowerCase().startsWith('don de') || 
         ingredient.name.toLowerCase().includes('gift')) {
@@ -2746,6 +2942,11 @@ class LegendaryCraftingBase {
           this._setActiveButton(null);
         }
 
+        const aggregateIds = Array.from(collectComponentIds(itemData));
+        if (aggregateIds.length) {
+          await preloadLegendaryAggregate(aggregateIds);
+        }
+
         this.currentTree = await this.createIngredientTree(itemData);
         await this.updateTotals();
       await this.renderTree();
@@ -3013,6 +3214,7 @@ class LegendaryCraftingBase {
   clearCache() {
       const successGW2 = gw2API.clearCache();
       const successDW2 = clearPriceCache ? clearPriceCache() : true;
+      clearLegendaryAggregateCache();
       if (successGW2 && successDW2) {
       alert('Caché limpiado correctamente');
       if (this.currentTree) this.loadItem({ itemId: this.itemIdInput?.value, itemName: this.itemNameInput?.value });
