@@ -1,4 +1,5 @@
 import fetchWithRetry from '../utils/fetchWithRetry.js';
+import { getConfig } from '../config.js';
 
 const DEFAULT_TTL = 2 * 60 * 1000; // 2 minutos
 const DEFAULT_PAGE_SIZE = 50;
@@ -62,10 +63,29 @@ function objectToMap(source, transform) {
   return map;
 }
 
+function joinApiPath(baseUrl, path) {
+  const base = typeof baseUrl === 'string' ? baseUrl.trim() : '';
+  const trimmedBase = base.replace(/\/+$/, '');
+  const normalizedPath = String(path || '').replace(/^\/+/, '');
+  if (!trimmedBase) {
+    return `/${normalizedPath}`;
+  }
+  if (!normalizedPath) {
+    return trimmedBase || '/';
+  }
+  return `${trimmedBase}/${normalizedPath}`;
+}
+
 async function requestAggregate(ids, options = {}) {
+  const config = getConfig();
+  const baseUrl = config?.API_BASE_URL || '/api';
+  const lang = options.lang || config?.DEFAULT_LANG || 'es';
+
   const params = new URLSearchParams();
-  params.set('ids', ids.join(','));
-  params.set('lang', 'es');
+  ids.forEach((id) => {
+    params.append('ids[]', String(id));
+  });
+  params.set('lang', String(lang));
   if (Array.isArray(options.fields) && options.fields.length > 0) {
     params.set('fields', options.fields.join(','));
   }
@@ -75,17 +95,28 @@ async function requestAggregate(ids, options = {}) {
   if (Number.isFinite(Number(options.pageSize)) && Number(options.pageSize) > 0) {
     params.set('pageSize', Math.floor(Number(options.pageSize)));
   }
-  const response = await fetchWithRetry(`/api/aggregate/bundle?${params.toString()}`, {
+  const requestUrl = `${joinApiPath(baseUrl, '/aggregate/bundle')}?${params.toString()}`;
+  const response = await fetchWithRetry(requestUrl, {
     signal: options.signal,
+    headers: {
+      Accept: 'application/json, text/plain;q=0.9',
+    },
   });
   if (!response.ok) {
     throw new Error(`Error ${response.status} al consultar el agregado de bundle`);
   }
   const contentType = response.headers?.get?.('content-type') || response.headers?.get?.('Content-Type') || '';
-  if (!String(contentType).toLowerCase().includes('application/json')) {
-    throw new Error('Respuesta no válida del agregado de bundle');
+  const rawText = await response.text();
+  let payload = null;
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch (err) {
+      throw new Error(
+        `Datos no válidos del agregado de bundle (content-type: ${contentType || 'desconocido'})`,
+      );
+    }
   }
-  const payload = await response.json().catch(() => null);
   if (!payload || typeof payload !== 'object') {
     throw new Error('Datos no válidos del agregado de bundle');
   }

@@ -27,6 +27,13 @@ async function testFetchAggregateBundleFields() {
     assert.ok(requestedUrl.includes('fields=priceMap%2CitemMap'), 'Debe solicitar itemMap en fields');
     assert.ok(requestedUrl.includes('page=2'), 'Debe propagar el parámetro page');
     assert.ok(requestedUrl.includes('pageSize=50'), 'Debe propagar el parámetro pageSize');
+    const payload = {
+      priceMap: { '101': { id: 101, buy_price: 123, sell_price: 456 } },
+      iconMap: { '101': 'file/test.png' },
+      rarityMap: { '101': 'Exotic' },
+      itemMap: { '101': { id: 101, name: 'Test Item', type: 'Weapon', icon: 'file/test.png', rarity: 'Exotic' } },
+      meta: { source: 'aggregate' },
+    };
     return {
       ok: true,
       headers: {
@@ -34,14 +41,8 @@ async function testFetchAggregateBundleFields() {
           return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
       },
-      async json() {
-        return {
-          priceMap: { '101': { id: 101, buy_price: 123, sell_price: 456 } },
-          iconMap: { '101': 'file/test.png' },
-          rarityMap: { '101': 'Exotic' },
-          itemMap: { '101': { id: 101, name: 'Test Item', type: 'Weapon', icon: 'file/test.png', rarity: 'Exotic' } },
-          meta: { source: 'aggregate' },
-        };
+      async text() {
+        return JSON.stringify(payload);
       },
     };
   }, async () => {
@@ -74,12 +75,8 @@ async function testMissingDataThrows() {
         return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
       },
     },
-    async json() {
-      return {
-        priceMap: {},
-        iconMap: {},
-        rarityMap: {},
-      };
+    async text() {
+      return JSON.stringify({ priceMap: {}, iconMap: {}, rarityMap: {} });
     },
   }), async () => {
     const { default: fetchAggregateBundle } = await import('../../src/js/utils/fetchAggregateBundle.js');
