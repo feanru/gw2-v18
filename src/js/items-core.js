@@ -6,7 +6,7 @@ import { fetchWithCache } from './utils/requestCache.js';
 import { getPrice, preloadPrices } from './utils/priceHelper.js';
 import { normalizeApiResponse } from './utils/apiResponse.js';
 import { isFeatureEnabled } from './utils/featureFlags.js';
-import { fetchItemAggregate } from './services/aggregateService.js';
+import { fetchItemAggregate } from './services/aggregateService.mjs';
 import { toUiModel } from './adapters/aggregateAdapter.js';
 import { renderFreshnessBanner, hideFreshnessBanner } from './utils/freshnessBanner.js';
 import './services/recipeService.js';

@@ -1,10 +1,14 @@
 // Bundled legendary crafting scripts
 import { getCached, setCached, fetchDedup } from './utils/cache.js';
 import { getPrice, clearCache as clearPriceCache } from './utils/priceHelper.js';
+import { fetchItemAggregate } from './services/aggregateService.mjs';
+import { toUiModel } from './adapters/aggregateAdapter.js';
 import { runCostsWorkerTask } from './workers/costsWorkerClient.js';
 /**
  * Servicio para interactuar con la API de Guild Wars 2
  */
+const LEGENDARY_AGG_FIELDS = ['item', 'totals', 'market'];
+
 class GuildWars2API {
   constructor() {
     this.BASE_URL = 'https://api.guildwars2.com/v2';
@@ -12,10 +16,79 @@ class GuildWars2API {
     this.PRICES_ENDPOINT = `${this.BASE_URL}/commerce/prices`;
     this.RECIPES_ENDPOINT = `${this.BASE_URL}/recipes/search`;
     this.ITEMS_BULK_ENDPOINT = `${this.BASE_URL}/items?ids=`;
-    
+
     // Configuración de caché
     this.CACHE_PREFIX = 'gw2_api_cache_';
     this.CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 horas en milisegundos
+  }
+
+  _normalizeItemData(itemId, item) {
+    if (!item) {
+      return null;
+    }
+    const normalized = { ...item };
+    if (normalized.icon) {
+      if (!normalized.icon.startsWith('http')) {
+        const cleanPath = normalized.icon
+          .replace(/^file\//, '')
+          .replace(/^\//, '');
+        normalized.icon = `https://render.guildwars2.com/file/${cleanPath}`;
+      }
+    } else {
+      console.warn(`[getItemDetails] El ítem ${itemId} no tiene icono definido`);
+      normalized.icon = `https://render.guildwars2.com/file/${itemId}.png`;
+    }
+    return normalized;
+  }
+
+  _normalizeAggregateMarket(itemId, market) {
+    if (!market || typeof market !== 'object') {
+      return null;
+    }
+    const toNumber = (value) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    };
+    const buy = [
+      market.unitBuyPrice,
+      market.unit_buy_price,
+      market.buy_price,
+      market.buyPrice,
+      market.buy,
+      market.total_buy,
+      market?.buys?.unit_price,
+    ].map(toNumber).find((value) => value != null);
+    const sell = [
+      market.unitSellPrice,
+      market.unit_sell_price,
+      market.sell_price,
+      market.sellPrice,
+      market.sell,
+      market.total_sell,
+      market?.sells?.unit_price,
+    ].map(toNumber).find((value) => value != null);
+    if (buy == null && sell == null) {
+      return null;
+    }
+    return {
+      id: Number(itemId) || itemId,
+      buys: { unit_price: buy ?? 0 },
+      sells: { unit_price: sell ?? 0 },
+    };
+  }
+
+  async _fetchAggregate(itemId, fields = LEGENDARY_AGG_FIELDS) {
+    const numericId = Number(itemId);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      return null;
+    }
+    try {
+      const raw = await fetchItemAggregate(numericId, { fields });
+      return toUiModel(raw);
+    } catch (error) {
+      console.warn(`[GuildWars2API] No se pudo obtener el agregado para el ítem ${itemId}`, error);
+      return null;
+    }
   }
 
   /**
@@ -51,6 +124,14 @@ class GuildWars2API {
    * Obtiene los precios de un ítem
    */
   async getItemPrices(itemId) {
+    const aggregate = await this._fetchAggregate(itemId, LEGENDARY_AGG_FIELDS);
+    if (aggregate?.market) {
+      const normalized = this._normalizeAggregateMarket(itemId, aggregate.market);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
     const url = `${this.PRICES_ENDPOINT}/${itemId}`;
     return this._fetchWithCache(url);
   }
@@ -59,44 +140,36 @@ class GuildWars2API {
    * Obtiene los detalles de un ítem
    */
   async getItemDetails(itemId) {
+    const url = `${this.ITEMS_ENDPOINT}/${itemId}?lang=es`;
+    const cacheKey = this.CACHE_PREFIX + btoa(url);
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const aggregate = await this._fetchAggregate(itemId, LEGENDARY_AGG_FIELDS);
+    if (aggregate?.item) {
+      const normalized = this._normalizeItemData(itemId, aggregate.item);
+      if (normalized) {
+        setCached(cacheKey, normalized, this.CACHE_DURATION);
+        return normalized;
+      }
+    }
+
     try {
-      const url = `${this.ITEMS_ENDPOINT}/${itemId}?lang=es`;
-      const item = await this._fetchWithCache(url);
-      
+      const item = await this._fetchWithCache(url, false);
       if (!item) {
         console.warn(`[getItemDetails] No se encontró el ítem con ID: ${itemId}`);
         return null;
       }
-      
-      // Registrar información de depuración
-      
-      // Si el ítem tiene un icono, lo normalizamos
-      if (item.icon) {
-        
-        // Si el icono ya es una URL completa, lo dejamos igual
-        if (item.icon.startsWith('http')) {
-        } 
-        // Si es una ruta relativa, la convertimos a URL completa
-        else {
-          // Eliminar cualquier prefijo 'file/' o '/' duplicado
-          const cleanPath = item.icon
-            .replace(/^file\//, '')  // Eliminar 'file/' al inicio
-            .replace(/^\//, '');     // Eliminar '/' al inicio
-            
-          item.icon = `https://render.guildwars2.com/file/${cleanPath}`;
-        }
-      } else {
-        // Si no hay icono, intentamos usar el ID del ítem
-        console.warn(`[getItemDetails] El ítem ${itemId} no tiene icono definido`);
-        item.icon = `https://render.guildwars2.com/file/${itemId}.png`;
+      const normalized = this._normalizeItemData(itemId, item);
+      if (normalized) {
+        setCached(cacheKey, normalized, this.CACHE_DURATION);
+        return normalized;
       }
-      
       return item;
-      
     } catch (error) {
       console.error(`[getItemDetails] Error al obtener detalles del ítem ${itemId}:`, error);
-      
-      // Si hay un error, devolvemos un objeto con la información básica
       return {
         id: itemId,
         name: `Item ${itemId}`,

@@ -307,6 +307,93 @@ async function testTtlRefreshWithMissingIds() {
   });
 }
 
+async function testPaginationRequests() {
+  const suffix = getFreshModuleId('pagination');
+  const fetchUrls = [];
+  await withPatchedFetch(async (url) => {
+    fetchUrls.push(String(url));
+    const parsed = new URL(url, 'http://localhost');
+    const page = Number(parsed.searchParams.get('page')) || 1;
+    const pageSize = Number(parsed.searchParams.get('pageSize')) || 0;
+    const fieldsParam = parsed.searchParams.get('fields');
+    assert.ok(fieldsParam && fieldsParam.includes('priceMap'), 'Debe solicitar campos específicos');
+    assert.equal(pageSize, 1, 'Debe respetar el pageSize solicitado');
+    if (page === 1) {
+      return {
+        ok: true,
+        headers: {
+          get(name) {
+            return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
+          },
+        },
+        async json() {
+          return {
+            priceMap: { 1: { buy_price: 101, sell_price: 202 } },
+            iconMap: { 1: 'https://cdn.test/icon-1.png' },
+            rarityMap: { 1: 'Legendario' },
+            itemMap: { 1: { id: 1, name: 'Uno' } },
+            meta: {
+              source: 'aggregate',
+              stale: false,
+              warnings: [],
+              pagination: {
+                page: 1,
+                pageSize: 1,
+                totalIds: 2,
+                totalPages: 2,
+                hasNext: true,
+                hasPrev: false,
+              },
+            },
+          };
+        },
+      };
+    }
+    if (page === 2) {
+      return {
+        ok: true,
+        headers: {
+          get(name) {
+            return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
+          },
+        },
+        async json() {
+          return {
+            priceMap: { 2: { buy_price: 303, sell_price: 404 } },
+            iconMap: { 2: 'https://cdn.test/icon-2.png' },
+            rarityMap: { 2: 'Exótico' },
+            itemMap: { 2: { id: 2, name: 'Dos' } },
+            meta: {
+              source: 'aggregate',
+              stale: false,
+              warnings: [],
+              pagination: {
+                page: 2,
+                pageSize: 1,
+                totalIds: 2,
+                totalPages: 2,
+                hasNext: false,
+                hasPrev: true,
+              },
+            },
+          };
+        },
+      };
+    }
+    throw new Error(`Página inesperada ${page}`);
+  }, async () => {
+    const module = await importService(suffix);
+    const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
+    await __resetDonesAggregateCacheForTests();
+    const result = await fetchDonesAggregate([1, 2], { ttl: 5_000, pageSize: 1 });
+    assert.equal(result.itemsMap.size, 2, 'Debe combinar ambos lotes paginados');
+    assert.equal(result.pricesMap.size, 2, 'Debe combinar los precios paginados');
+    assert.equal(fetchUrls.length, 2, 'Debe realizar dos solicitudes');
+    assert.ok(fetchUrls[0].includes('page=1'));
+    assert.ok(fetchUrls[1].includes('page=2'));
+  });
+}
+
 async function run() {
   await testCacheReuse();
   await testPartialResponse();
@@ -314,6 +401,7 @@ async function run() {
   await testInvalidResponseThrows();
   await testTtlRefresh();
   await testTtlRefreshWithMissingIds();
+  await testPaginationRequests();
   console.log('tests/frontend/dones-aggregate-service.test.mjs passed');
 }
 

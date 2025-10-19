@@ -4,7 +4,7 @@ import { normalizeApiResponse } from './utils/apiResponse.js';
 import { isFeatureEnabled } from './utils/featureFlags.js';
 import { getConfig } from './config.js';
 import { getBucket } from './utils/canaryBucket.js';
-import { fetchItemAggregate } from './services/aggregateService.js';
+import { fetchItemAggregate } from './services/aggregateService.mjs';
 import { toUiModel } from './adapters/aggregateAdapter.js';
 import { hydrateAggregateTree } from './utils/aggregateHydrator.js';
 import { renderFreshnessBanner, hideFreshnessBanner } from './utils/freshnessBanner.js';
@@ -59,6 +59,16 @@ async function ensureDeps() {
 let loadToken = 0;
 let stopPriceUpdater = null;
 let itemDetailsController = null;
+
+function stopPriceUpdaterIfNeeded() {
+  if (!stopPriceUpdater) return;
+  try {
+    stopPriceUpdater();
+  } catch (err) {
+    console.warn('Error deteniendo actualizador de precios', err);
+  }
+  stopPriceUpdater = null;
+}
 
 function buildItemDetailsApiUrl(baseUrl, itemId) {
   const base = typeof baseUrl === 'string' ? baseUrl.trim() : '';
@@ -131,24 +141,34 @@ function recordAggregateFallback(reason, meta = null, error = null, bucket = nul
 async function loadItemUsingAggregate(itemId, skeleton, currentToken, context = {}) {
   hideFreshnessBanner();
   window.hideError?.();
-  if (stopPriceUpdater) {
-    try {
-      stopPriceUpdater();
-    } catch (err) {
-      console.warn('Error deteniendo actualizador de precios', err);
-    }
-    stopPriceUpdater = null;
-  }
   let fallbackTriggered = false;
   const { bucket = null } = context || {};
   const now = () => telemetryNow();
   const startTime = now();
   let lastMeta = null;
+  const previousStopper = stopPriceUpdater;
+  let previousStopperHandled = false;
+
+  const stopPreviousPriceUpdater = () => {
+    if (previousStopperHandled) return;
+    previousStopperHandled = true;
+    if (!previousStopper) return;
+    try {
+      previousStopper();
+    } catch (err) {
+      console.warn('Error deteniendo actualizador previo', err);
+    }
+    if (stopPriceUpdater === previousStopper) {
+      stopPriceUpdater = null;
+    }
+  };
 
   const triggerFallback = async (reason, meta, err) => {
     if (fallbackTriggered) return;
     fallbackTriggered = true;
     const staleFlag = meta?.stale ?? lastMeta?.stale ?? null;
+    stopPreviousPriceUpdater();
+    stopPriceUpdaterIfNeeded();
     recordAggregateFallback(reason, meta, err, bucket);
     await loadItemLegacy(itemId, skeleton, currentToken, {
       bucket,
@@ -165,6 +185,19 @@ async function loadItemUsingAggregate(itemId, skeleton, currentToken, context = 
     const raw = await aggregateFetcher(itemId, {
       signal: itemDetailsController.signal,
     });
+    if (raw?.status === 304 && raw.fromCache) {
+      lastMeta = raw.meta || null;
+      window.hideSkeleton?.(skeleton);
+      renderFreshnessBanner(raw.meta);
+      trackTelemetryEvent({
+        type: 'aggregateNotModified',
+        bucket,
+        meta: { stale: raw.meta?.stale ?? null },
+      });
+      return;
+    }
+    stopPreviousPriceUpdater();
+    stopPriceUpdaterIfNeeded();
     const uiModel = toUiModel(raw);
     const { item, market, tree, meta } = uiModel;
     lastMeta = meta || null;
@@ -222,6 +255,7 @@ async function loadItemUsingAggregate(itemId, skeleton, currentToken, context = 
     if (err?.name === 'AbortError') {
       return;
     }
+    stopPreviousPriceUpdater();
     window.hideSkeleton?.(skeleton);
     console.error('Error cargando agregado de ítem', err);
     window.showError?.('No se pudo cargar el agregado del ítem.');

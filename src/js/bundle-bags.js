@@ -1,10 +1,13 @@
 import { bags32 } from './data/bags32.js';
 import { getPrice } from './utils/priceHelper.js';
+import { fetchItemAggregate } from './services/aggregateService.mjs';
+import { toUiModel } from './adapters/aggregateAdapter.js';
 import { getItemDetails, getItemBundles } from './services/recipeService.js';
 import { runCostsWorkerTask } from './workers/costsWorkerClient.js';
 import { formatGoldColored, getRarityClass } from './bundle-utils-1.js';
 
 const DEFAULT_ICON_URL = 'https://render.guildwars2.com/file/0120CB0368B7953F0D3BD2A0C9100BCF0839FF4D/219035.png';
+const AGGREGATE_FIELDS = ['item', 'totals', 'market'];
 
 class Ingredient {
   constructor(id, name, type, rarity = null, count = 1, parent = null) {
@@ -363,6 +366,37 @@ class BagCraftingApp {
     return ingredient;
   }
 
+  async fetchAggregateSnapshot(itemId, fields = AGGREGATE_FIELDS) {
+    const numericId = Number(itemId);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      return null;
+    }
+
+    try {
+      const raw = await fetchItemAggregate(numericId, { fields });
+      const { item, market } = toUiModel(raw);
+      const key = String(numericId);
+
+      if (item) {
+        const normalized = { ...item };
+        if (normalized.icon) {
+          normalized.icon = normalizeIcon(normalized.icon);
+        }
+        this.itemDetailsCache.set(key, normalized);
+      }
+
+      const normalizedMarket = this.normalizeMarketData(market);
+      if (normalizedMarket) {
+        this.priceCache.set(key, normalizedMarket);
+      }
+
+      return { item, market };
+    } catch (error) {
+      console.warn(`[BagCraftingApp] No se pudo obtener el agregado para el ítem ${itemId}`, error);
+      return null;
+    }
+  }
+
   normalizeMarketData(market) {
     if (!market || typeof market !== 'object') {
       return null;
@@ -376,12 +410,20 @@ class BagCraftingApp {
     const buyCandidates = [
       market.buy_price,
       market.buyPrice,
-      market?.buys?.unit_price
+      market?.buys?.unit_price,
+      market.unitBuyPrice,
+      market.unit_buy_price,
+      market.buy,
+      market.total_buy,
     ];
     const sellCandidates = [
       market.sell_price,
       market.sellPrice,
-      market?.sells?.unit_price
+      market?.sells?.unit_price,
+      market.unitSellPrice,
+      market.unit_sell_price,
+      market.sell,
+      market.total_sell,
     ];
 
     const buy = buyCandidates.map(toNumber).find(value => value != null);
@@ -442,14 +484,40 @@ class BagCraftingApp {
       return;
     }
 
+    const missingIds = new Set();
+
+    await Promise.allSettled(
+      ids.map(async (rawId) => {
+        const itemId = Number(rawId);
+        if (!Number.isFinite(itemId) || itemId <= 0) {
+          return;
+        }
+        const key = String(itemId);
+        const hasDetails = this.itemDetailsCache.has(key);
+        const hasPrice = this.priceCache.has(key);
+        if (hasDetails && hasPrice) {
+          return;
+        }
+        const aggregate = await this.fetchAggregateSnapshot(itemId, AGGREGATE_FIELDS);
+        if (!aggregate || (!aggregate.item && !aggregate.market)) {
+          missingIds.add(itemId);
+        }
+      })
+    );
+
+    if (!missingIds.size) {
+      return;
+    }
+
     try {
-      const bundles = await getItemBundles(ids);
+      const fallbackIds = Array.from(missingIds);
+      const bundles = await getItemBundles(fallbackIds);
       if (!Array.isArray(bundles)) {
         return;
       }
 
       bundles.forEach((bundle, index) => {
-        const itemId = ids[index];
+        const itemId = fallbackIds[index];
         this.storeBundleInCaches(itemId, bundle);
       });
     } catch (error) {
@@ -492,6 +560,11 @@ class BagCraftingApp {
       return normalized;
     }
 
+    const aggregate = await this.fetchAggregateSnapshot(itemId, AGGREGATE_FIELDS);
+    if (aggregate?.item) {
+      return this.itemDetailsCache.get(key) || aggregate.item || null;
+    }
+
     try {
       const details = await getItemDetails(itemId);
       if (details && details.icon) {
@@ -517,6 +590,12 @@ class BagCraftingApp {
     if (market) {
       this.priceCache.set(key, market);
       return market;
+    }
+
+    await this.fetchAggregateSnapshot(itemId, AGGREGATE_FIELDS);
+    const fromAggregate = this.priceCache.get(key) || null;
+    if (fromAggregate) {
+      return fromAggregate;
     }
 
     try {
