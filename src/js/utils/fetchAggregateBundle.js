@@ -118,9 +118,6 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
   normalizedIds.forEach((id) => {
     params.append('ids[]', String(id));
   });
-  if (normalizedIds.length > 0) {
-    params.set('ids', normalizedIds.map((id) => String(id)).join(','));
-  }
   params.set('lang', String(defaultLang));
   const normalizedFields = normalizeFields(fields);
   if (normalizedFields) {

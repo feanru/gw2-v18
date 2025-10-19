@@ -85,9 +85,6 @@ async function requestAggregate(ids, options = {}) {
   ids.forEach((id) => {
     params.append('ids[]', String(id));
   });
-  if (ids.length > 0) {
-    params.set('ids', ids.map((id) => String(id)).join(','));
-  }
   params.set('lang', String(lang));
   if (Array.isArray(options.fields) && options.fields.length > 0) {
     params.set('fields', options.fields.join(','));
