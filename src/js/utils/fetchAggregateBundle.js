@@ -1,5 +1,29 @@
 import fetchWithRetry from './fetchWithRetry.js';
 
+function emitCacheMetric(metric) {
+  if (typeof window === 'undefined' || !window) {
+    return;
+  }
+  const allowed = new Set(['hit', 'miss', 'stale']);
+  if (!allowed.has(metric)) {
+    return;
+  }
+  const base = window.__cacheMetrics__ && typeof window.__cacheMetrics__ === 'object'
+    ? {
+        hit: Number(window.__cacheMetrics__.hit) || 0,
+        miss: Number(window.__cacheMetrics__.miss) || 0,
+        stale: Number(window.__cacheMetrics__.stale) || 0,
+        lastUpdated: Number(window.__cacheMetrics__.lastUpdated) || 0,
+      }
+    : { hit: 0, miss: 0, stale: 0, lastUpdated: 0 };
+  base[metric] += 1;
+  base.lastUpdated = Date.now();
+  window.__cacheMetrics__ = base;
+  if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('cache-metrics', { detail: { ...base } }));
+  }
+}
+
 function normalizeId(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : value;
@@ -87,6 +111,12 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     throw new Error('Datos no válidos del agregado de bundle');
   }
 
+  const snapshotIdHeader = response.headers.get('X-Snapshot-Id');
+  const ttlHeader = response.headers.get('X-Snapshot-TTL');
+  const ttlSeconds = ttlHeader != null ? parseInt(ttlHeader, 10) : null;
+  const staleHeader = response.headers.get('X-Snapshot-Stale');
+  const dataSourceHeader = response.headers.get('X-Data-Source');
+
   const priceMap = new Map();
   const iconMap = new Map();
   const rarityMap = new Map();
@@ -160,11 +190,33 @@ export default async function fetchAggregateBundle(ids = [], options = {}) {
     throw new Error('Datos incompletos del agregado de bundle');
   }
 
+  const normalizedMeta = { ...(payload.meta || {}) };
+  if (snapshotIdHeader && !normalizedMeta.snapshotId) {
+    normalizedMeta.snapshotId = snapshotIdHeader;
+  }
+  if (Number.isFinite(ttlSeconds)) {
+    normalizedMeta.snapshotTtl = ttlSeconds;
+  }
+  if (typeof staleHeader === 'string') {
+    normalizedMeta.stale = staleHeader === '1' || normalizedMeta.stale === true;
+  }
+  if (dataSourceHeader && !normalizedMeta.source) {
+    normalizedMeta.source = dataSourceHeader;
+  }
+
+  let metric = 'hit';
+  if (normalizedMeta.source === 'fallback') {
+    metric = 'miss';
+  } else if (normalizedMeta.stale || (Number.isFinite(ttlSeconds) && ttlSeconds <= 0)) {
+    metric = 'stale';
+  }
+  emitCacheMetric(metric);
+
   return {
     priceMap,
     iconMap,
     rarityMap,
     itemMap,
-    meta: payload.meta || null,
+    meta: normalizedMeta,
   };
 }
