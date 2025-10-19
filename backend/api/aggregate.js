@@ -313,7 +313,6 @@ function buildMapsFromEntries(ids, entries) {
   const priceMap = {};
   const iconMap = {};
   const rarityMap = {};
-  const itemMap = {};
 
   for (const itemId of ids) {
     const entry = entries.get(itemId);
@@ -322,19 +321,6 @@ function buildMapsFromEntries(ids, entries) {
 
     iconMap[itemId] = itemData?.icon ?? null;
     rarityMap[itemId] = itemData?.rarity ?? null;
-
-    if (itemData) {
-      itemMap[itemId] = {
-        id: itemId,
-        name: itemData.name ?? null,
-        icon: itemData.icon ?? null,
-        type: itemData.type ?? null,
-        rarity: itemData.rarity ?? null,
-        level: itemData.level ?? null,
-      };
-    } else {
-      itemMap[itemId] = null;
-    }
 
     if (totals) {
       priceMap[itemId] = {
@@ -347,7 +333,7 @@ function buildMapsFromEntries(ids, entries) {
     }
   }
 
-  return { priceMap, iconMap, rarityMap, itemMap };
+  return { priceMap, iconMap, rarityMap };
 }
 
 function buildAggregateMeta({

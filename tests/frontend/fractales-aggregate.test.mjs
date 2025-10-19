@@ -25,20 +25,6 @@ async function testAggregateBundleHappyPath() {
     const urlString = String(url);
     fetchCalls.push(urlString);
     if (urlString.startsWith(aggregateUrlPrefix)) {
-      const payload = {
-        priceMap: {
-          101: { buy_price: 111, sell_price: 222 },
-          102: { buy_price: 333, sell_price: 444 },
-        },
-        iconMap: {
-          101: 'https://example.com/icons/101.png',
-          102: 'https://example.com/icons/102.png',
-        },
-        rarityMap: {
-          101: 'Exótico',
-          102: 'Raro',
-        },
-      };
       return {
         ok: true,
         status: 200,
@@ -50,8 +36,21 @@ async function testAggregateBundleHappyPath() {
             return null;
           },
         },
-        async text() {
-          return JSON.stringify(payload);
+        async json() {
+          return {
+            priceMap: {
+              101: { buy_price: 111, sell_price: 222 },
+              102: { buy_price: 333, sell_price: 444 },
+            },
+            iconMap: {
+              101: 'https://example.com/icons/101.png',
+              102: 'https://example.com/icons/102.png',
+            },
+            rarityMap: {
+              101: 'Exótico',
+              102: 'Raro',
+            },
+          };
         },
       };
     }

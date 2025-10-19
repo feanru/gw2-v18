@@ -122,43 +122,6 @@ export function getCached(key, withMeta = false) {
   return withMeta ? entry : entry.value;
 }
 
-export function clearCachedPrefix(prefix) {
-  if (!prefix) {
-    return 0;
-  }
-  const normalized = String(prefix);
-  const clearedKeys = new Set();
-
-  cacheStore.forEach((value, key) => {
-    if (key.startsWith(normalized)) {
-      cacheStore.delete(key);
-      clearedKeys.add(key);
-    }
-  });
-
-  if (STORAGE_AVAILABLE) {
-    const toRemove = [];
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (key && key.startsWith(normalized)) {
-        toRemove.push(key);
-        clearedKeys.add(key);
-      }
-    }
-    toRemove.forEach((key) => {
-      try {
-        localStorage.removeItem(key);
-      } catch {
-        // ignore storage errors
-      }
-    });
-  }
-
-  clearedKeys.forEach((key) => notifyDelete(key));
-
-  return clearedKeys.size;
-}
-
 export function fetchDedup(url, options = {}) {
   const key = requestKey(url, options);
   const base =
@@ -171,7 +134,6 @@ export function fetchDedup(url, options = {}) {
 export default {
   getCached,
   setCached,
-  fetchDedup,
-  clearCachedPrefix,
+  fetchDedup
 };
 

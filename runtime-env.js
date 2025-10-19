@@ -74,16 +74,6 @@
     ? runtime.FEATURE_USE_PRECOMPUTED
     : false; // El backend puede elevar esta flag sin volver a desplegar el bundle.
 
-  const FEATURE_ITEM_API_ROLLOUT = (() => {
-    if (secureConfig && Object.prototype.hasOwnProperty.call(secureConfig, 'FEATURE_ITEM_API_ROLLOUT')) {
-      return secureConfig.FEATURE_ITEM_API_ROLLOUT;
-    }
-    if (Object.prototype.hasOwnProperty.call(runtime, 'FEATURE_ITEM_API_ROLLOUT')) {
-      return runtime.FEATURE_ITEM_API_ROLLOUT;
-    }
-    return false;
-  })();
-
   // Este archivo debe servirse con `Cache-Control: no-store` para que los cambios
   // del runtime se reflejen inmediatamente en el cliente.
 
@@ -94,8 +84,7 @@
       FETCH_GUARD_MODE,
       FETCH_GUARD_WHITELIST,
       FETCH_GUARD_REPORT_URL,
-      FEATURE_USE_PRECOMPUTED,
-      FEATURE_ITEM_API_ROLLOUT
+      FEATURE_USE_PRECOMPUTED
     }
   );
 })();

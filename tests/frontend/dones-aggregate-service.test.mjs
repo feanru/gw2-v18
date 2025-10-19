@@ -35,25 +35,6 @@ async function testCacheReuse() {
     if (!urlString.startsWith('/api/aggregate/bundle')) {
       throw new Error(`Unexpected URL ${urlString}`);
     }
-    const payload = {
-      priceMap: {
-        1: { buy_price: 101, sell_price: 202 },
-        2: { buy_price: 303, sell_price: 404 },
-      },
-      iconMap: {
-        1: 'https://cdn.test/icon-1.png',
-        2: 'https://cdn.test/icon-2.png',
-      },
-      rarityMap: {
-        1: 'Legendario',
-        2: 'Exótico',
-      },
-      itemMap: {
-        1: { id: 1, name: 'Uno', icon: 'https://cdn.test/icon-1.png', rarity: 'Legendario' },
-        2: { id: 2, name: 'Dos', icon: 'https://cdn.test/icon-2.png', rarity: 'Exótico' },
-      },
-      meta: { source: 'aggregate', stale: false, warnings: [] },
-    };
     return {
       ok: true,
       headers: {
@@ -61,8 +42,26 @@ async function testCacheReuse() {
           return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
       },
-      async text() {
-        return JSON.stringify(payload);
+      async json() {
+        return {
+          priceMap: {
+            1: { buy_price: 101, sell_price: 202 },
+            2: { buy_price: 303, sell_price: 404 },
+          },
+          iconMap: {
+            1: 'https://cdn.test/icon-1.png',
+            2: 'https://cdn.test/icon-2.png',
+          },
+          rarityMap: {
+            1: 'Legendario',
+            2: 'Exótico',
+          },
+          itemMap: {
+            1: { id: 1, name: 'Uno', icon: 'https://cdn.test/icon-1.png', rarity: 'Legendario' },
+            2: { id: 2, name: 'Dos', icon: 'https://cdn.test/icon-2.png', rarity: 'Exótico' },
+          },
+          meta: { source: 'aggregate', stale: false, warnings: [] },
+        };
       },
     };
   }, async () => {
@@ -92,31 +91,28 @@ async function testCacheReuse() {
 
 async function testPartialResponse() {
   const suffix = getFreshModuleId('partial');
-  await withPatchedFetch(async () => {
-    const payload = {
-      priceMap: {
-        5: { buy_price: 500, sell_price: 600 },
+  await withPatchedFetch(async () => ({
+    ok: true,
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
       },
-      iconMap: {
-        5: 'https://cdn.test/icon-5.png',
-      },
-      rarityMap: {
-        5: 'Raro',
-      },
-      meta: { source: 'aggregate', stale: false, warnings: [] },
-    };
-    return {
-      ok: true,
-      headers: {
-        get(name) {
-          return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
+    },
+    async json() {
+      return {
+        priceMap: {
+          5: { buy_price: 500, sell_price: 600 },
         },
-      },
-      async text() {
-        return JSON.stringify(payload);
-      },
-    };
-  }, async () => {
+        iconMap: {
+          5: 'https://cdn.test/icon-5.png',
+        },
+        rarityMap: {
+          5: 'Raro',
+        },
+        meta: { source: 'aggregate', stale: false, warnings: [] },
+      };
+    },
+  }), async () => {
     const module = await importService(suffix);
     const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
     await __resetDonesAggregateCacheForTests();
@@ -130,30 +126,27 @@ async function testPartialResponse() {
 async function testIconFallbackUsesString() {
   const suffix = getFreshModuleId('icon-fallback');
   const expectedIcon = 'https://cdn.test/icon-77.png';
-  await withPatchedFetch(async () => {
-    const payload = {
-      priceMap: {},
-      iconMap: {
-        77: expectedIcon,
+  await withPatchedFetch(async () => ({
+    ok: true,
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
       },
-      rarityMap: {},
-      itemMap: {
-        77: { id: 77, name: 'Setenta y siete' },
-      },
-      meta: { source: 'aggregate', stale: false, warnings: [] },
-    };
-    return {
-      ok: true,
-      headers: {
-        get(name) {
-          return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
+    },
+    async json() {
+      return {
+        priceMap: {},
+        iconMap: {
+          77: expectedIcon,
         },
-      },
-      async text() {
-        return JSON.stringify(payload);
-      },
-    };
-  }, async () => {
+        rarityMap: {},
+        itemMap: {
+          77: { id: 77, name: 'Setenta y siete' },
+        },
+        meta: { source: 'aggregate', stale: false, warnings: [] },
+      };
+    },
+  }), async () => {
     const module = await importService(suffix);
     const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
     await __resetDonesAggregateCacheForTests();
@@ -169,68 +162,28 @@ async function testIconFallbackUsesString() {
   });
 }
 
-async function testInvalidResponseFallsBack() {
+async function testInvalidResponseThrows() {
   const suffix = getFreshModuleId('error');
-  await withPatchedFetch(async (url) => {
-    const urlString = String(url);
-    if (urlString.includes('/aggregate/bundle')) {
-      return {
-        ok: false,
-        status: 503,
-        headers: {
-          get() {
-            return 'application/json';
-          },
-        },
-      };
-    }
-    if (urlString.includes('/api/items/bundle')) {
-      return {
-        ok: false,
-        status: 502,
-        headers: {
-          get() {
-            return 'application/json';
-          },
-        },
-      };
-    }
-    if (urlString.includes('/backend/api/dataBundle.php')) {
-      const payload = {
-        data: [
-          {
-            id: 10,
-            item: { id: 10, name: 'Fallback Item', icon: 'file/fallback.png', rarity: 'Raro' },
-            market: { buy_price: 100, sell_price: 150 },
-            extra: { last_updated: 1_700_000_000 },
-          },
-        ],
-        meta: { source: 'fallback', stale: false },
-      };
-      return {
-        ok: true,
-        headers: {
-          get() {
-            return 'application/json';
-          },
-        },
-        async json() {
-          return payload;
-        },
-      };
-    }
-    throw new Error(`Unexpected URL ${urlString}`);
-  }, async () => {
+  await withPatchedFetch(async () => ({
+    ok: false,
+    status: 503,
+    headers: {
+      get() {
+        return 'application/json';
+      },
+    },
+  }), async () => {
     const module = await importService(suffix);
     const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
     await __resetDonesAggregateCacheForTests();
-    const result = await fetchDonesAggregate([10]);
-    assert.equal(result.ok, true, 'Debe completar el fallback correctamente');
-    const entry = result.itemsMap.get(10);
-    assert.equal(entry?.name, 'Fallback Item', 'Debe propagar el ítem del fallback');
-    assert.equal(result.pricesMap.get(10)?.buy_price, 100, 'Debe normalizar los precios del fallback');
-    assert.equal(result.meta?.source, 'fallback', 'La metadata debe indicar el origen de fallback');
-    assert.ok(result.meta?.stale, 'El fallback debe marcarse como stale');
+    let threw = false;
+    try {
+      await fetchDonesAggregate([10]);
+    } catch (err) {
+      threw = true;
+      assert.match(String(err?.message || err), /503/);
+    }
+    assert.equal(threw, true, 'Debe propagar errores HTTP');
   });
 }
 
@@ -262,8 +215,8 @@ async function testTtlRefresh() {
           return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
       },
-      async text() {
-        return JSON.stringify(payload);
+      async json() {
+        return payload;
       },
     };
   }, async () => {
@@ -329,8 +282,8 @@ async function testTtlRefreshWithMissingIds() {
           return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
         },
       },
-      async text() {
-        return JSON.stringify(payload);
+      async json() {
+        return payload;
       },
     };
   }, async () => {
@@ -366,25 +319,6 @@ async function testPaginationRequests() {
     assert.ok(fieldsParam && fieldsParam.includes('priceMap'), 'Debe solicitar campos específicos');
     assert.equal(pageSize, 1, 'Debe respetar el pageSize solicitado');
     if (page === 1) {
-      const payload = {
-        priceMap: { 1: { buy_price: 101, sell_price: 202 } },
-        iconMap: { 1: 'https://cdn.test/icon-1.png' },
-        rarityMap: { 1: 'Legendario' },
-        itemMap: { 1: { id: 1, name: 'Uno' } },
-        meta: {
-          source: 'aggregate',
-          stale: false,
-          warnings: [],
-          pagination: {
-            page: 1,
-            pageSize: 1,
-            totalIds: 2,
-            totalPages: 2,
-            hasNext: true,
-            hasPrev: false,
-          },
-        },
-      };
       return {
         ok: true,
         headers: {
@@ -392,31 +326,30 @@ async function testPaginationRequests() {
             return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
           },
         },
-        async text() {
-          return JSON.stringify(payload);
+        async json() {
+          return {
+            priceMap: { 1: { buy_price: 101, sell_price: 202 } },
+            iconMap: { 1: 'https://cdn.test/icon-1.png' },
+            rarityMap: { 1: 'Legendario' },
+            itemMap: { 1: { id: 1, name: 'Uno' } },
+            meta: {
+              source: 'aggregate',
+              stale: false,
+              warnings: [],
+              pagination: {
+                page: 1,
+                pageSize: 1,
+                totalIds: 2,
+                totalPages: 2,
+                hasNext: true,
+                hasPrev: false,
+              },
+            },
+          };
         },
       };
     }
     if (page === 2) {
-      const payload = {
-        priceMap: { 2: { buy_price: 303, sell_price: 404 } },
-        iconMap: { 2: 'https://cdn.test/icon-2.png' },
-        rarityMap: { 2: 'Exótico' },
-        itemMap: { 2: { id: 2, name: 'Dos' } },
-        meta: {
-          source: 'aggregate',
-          stale: false,
-          warnings: [],
-          pagination: {
-            page: 2,
-            pageSize: 1,
-            totalIds: 2,
-            totalPages: 2,
-            hasNext: false,
-            hasPrev: true,
-          },
-        },
-      };
       return {
         ok: true,
         headers: {
@@ -424,8 +357,26 @@ async function testPaginationRequests() {
             return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
           },
         },
-        async text() {
-          return JSON.stringify(payload);
+        async json() {
+          return {
+            priceMap: { 2: { buy_price: 303, sell_price: 404 } },
+            iconMap: { 2: 'https://cdn.test/icon-2.png' },
+            rarityMap: { 2: 'Exótico' },
+            itemMap: { 2: { id: 2, name: 'Dos' } },
+            meta: {
+              source: 'aggregate',
+              stale: false,
+              warnings: [],
+              pagination: {
+                page: 2,
+                pageSize: 1,
+                totalIds: 2,
+                totalPages: 2,
+                hasNext: false,
+                hasPrev: true,
+              },
+            },
+          };
         },
       };
     }
@@ -447,7 +398,7 @@ async function run() {
   await testCacheReuse();
   await testPartialResponse();
   await testIconFallbackUsesString();
-  await testInvalidResponseFallsBack();
+  await testInvalidResponseThrows();
   await testTtlRefresh();
   await testTtlRefreshWithMissingIds();
   await testPaginationRequests();
