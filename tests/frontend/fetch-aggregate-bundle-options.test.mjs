@@ -24,6 +24,8 @@ async function testFetchAggregateBundleFields() {
 
   await withPatchedFetch(async (url) => {
     requestedUrl = String(url);
+    assert.ok(requestedUrl.includes('ids%5B%5D=101'), 'Debe enviar ids[] individuales');
+    assert.ok(requestedUrl.includes('ids=101'), 'Debe incluir ids concatenados para compatibilidad');
     assert.ok(requestedUrl.includes('fields=priceMap%2CitemMap'), 'Debe solicitar itemMap en fields');
     assert.ok(requestedUrl.includes('page=2'), 'Debe propagar el parámetro page');
     assert.ok(requestedUrl.includes('pageSize=50'), 'Debe propagar el parámetro pageSize');
