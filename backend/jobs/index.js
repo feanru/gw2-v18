@@ -7,7 +7,10 @@ const updateRecipes = require('./updateRecipes');
 const buildRecipeTrees = require('./buildRecipeTrees');
 const cleanupSnapshots = require('./cleanupSnapshots');
 const { buildSyncHealthPayload } = require('./healthSummary');
-const { buildDashboardSnapshot } = require('../api/index.js');
+const {
+  getDashboardSnapshotCached: fetchDashboardSnapshot,
+  invalidateDashboardSnapshotCache,
+} = require('../api/index.js');
 
 const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017/gw2';
 const HEALTH_PORT = Number(process.env.HEALTH_PORT || process.env.PORT || 3100);
@@ -16,16 +19,11 @@ const CACHE_TTL_FAST = Number(process.env.CACHE_TTL_FAST || 120);
 const CACHE_TTL_SLOW = Number(process.env.CACHE_TTL_SLOW || 1800);
 const RECIPE_TREE_INTERVAL = Number(process.env.RECIPE_TREE_INTERVAL || 3600);
 const SNAPSHOT_CLEANUP_INTERVAL = Number(process.env.SNAPSHOT_CLEANUP_INTERVAL || 6 * 3600);
-const DASHBOARD_CACHE_MS = Math.max(Number(process.env.DASHBOARD_CACHE_MS || 60000), 5000);
 const MIN_INTERVAL_SECONDS = 30;
 
 log('scheduler started');
 
 const scheduledTimeouts = new Set();
-
-let dashboardCache = null;
-let dashboardCacheAt = 0;
-let dashboardPromise = null;
 
 function delay(ms) {
   if (!ms || ms <= 0) {
@@ -117,41 +115,8 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function invalidateDashboardCache() {
-  dashboardCache = null;
-  dashboardCacheAt = 0;
-}
-
-async function getDashboardSnapshotCached() {
-  const now = Date.now();
-  if (dashboardCache && now - dashboardCacheAt < DASHBOARD_CACHE_MS) {
-    return dashboardCache;
-  }
-  if (!dashboardPromise) {
-    dashboardPromise = buildDashboardSnapshot()
-      .then((snapshot) => {
-        dashboardCache = snapshot;
-        dashboardCacheAt = Date.now();
-        return snapshot;
-      })
-      .catch((err) => {
-        log(`[scheduler] dashboard snapshot error: ${err.message}`);
-        return null;
-      })
-      .finally(() => {
-        dashboardPromise = null;
-      });
-  }
-  const snapshot = await dashboardPromise;
-  if (!snapshot) {
-    dashboardCache = null;
-    dashboardCacheAt = 0;
-  }
-  return snapshot;
-}
-
 async function computeCollectionInterval(collectionName, baseSeconds) {
-  const snapshot = await getDashboardSnapshotCached();
+  const { snapshot } = (await fetchDashboardSnapshot()) || {};
   if (!snapshot || !snapshot.freshness) {
     return baseSeconds;
   }
@@ -205,7 +170,7 @@ async function computeCollectionInterval(collectionName, baseSeconds) {
 }
 
 async function computeRecipeTreeInterval(baseSeconds) {
-  const snapshot = await getDashboardSnapshotCached();
+  const { snapshot } = (await fetchDashboardSnapshot()) || {};
   if (!snapshot) {
     return baseSeconds;
   }
@@ -320,7 +285,11 @@ function scheduleJob(name, intervalSeconds, jobFn, computeIntervalFn, options = 
     } finally {
       running = false;
       if (typeof computeIntervalFn === 'function') {
-        invalidateDashboardCache();
+        try {
+          await invalidateDashboardSnapshotCache();
+        } catch (err) {
+          log(`[scheduler] failed to invalidate dashboard snapshot cache: ${err.message}`);
+        }
       }
       try {
         await planNext('post-run');

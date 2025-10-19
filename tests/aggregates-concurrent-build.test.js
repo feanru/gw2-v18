@@ -21,6 +21,8 @@ require.cache[redisPath] = {
 };
 
 async function run() {
+  const snapshotCache = require('../backend/utils/snapshotCache.js');
+  snapshotCache.__private.clearLocal();
   delete require.cache[require.resolve('../backend/aggregates/buildItemAggregate.js')];
   const aggregateModuleFirst = require('../backend/aggregates/buildItemAggregate.js');
 
@@ -29,6 +31,7 @@ async function run() {
   await sleep(30);
 
   delete require.cache[require.resolve('../backend/aggregates/buildItemAggregate.js')];
+  snapshotCache.__private.clearLocal();
   const aggregateModuleSecond = require('../backend/aggregates/buildItemAggregate.js');
 
   const secondPromise = aggregateModuleSecond.buildItemAggregate(1001, 'es');

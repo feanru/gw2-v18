@@ -180,6 +180,10 @@ async function testCachesUpdatedAfterModernBundleSuccess() {
   assert.equal(cached.item?.id, 90401, 'El cache debe contener el ítem retornado');
   assert.equal(window.__bundleFallbacks__.length, 0, 'No debe registrar fallbacks en éxito');
 
+  const cachedBundles = await module.getItemBundles([90401]);
+  assert.equal(fetchCalls.length, 1, 'Debe reutilizar el cache en la segunda llamada');
+  assert.equal(cachedBundles[0]?.item?.name, 'Modern Bundle 90401');
+
   env.restore();
 }
 
@@ -249,6 +253,11 @@ async function testFallbackCachesAndTelemetryWhenModernFails() {
     window.__bundleFallbacks__[0].ids.includes('90402'),
     'El evento de fallback debe incluir el ID solicitado',
   );
+
+  const cachedBundles = await module.getItemBundles([90402]);
+  assert.equal(apiRequests.length >= 1, true, 'Debe mantener el contador de llamadas iniciales');
+  assert.equal(fallbackRequests.length, 1, 'No debe repetir el fallback con cache activo');
+  assert.equal(cachedBundles[0]?.item?.name, 'Legacy Bundle 90402');
 
   env.restore();
 }
