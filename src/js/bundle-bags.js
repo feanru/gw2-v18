@@ -3,6 +3,7 @@ import { getPrice } from './utils/priceHelper.js';
 import { getItemDetails, getItemBundles } from './services/recipeService.js';
 import { runCostsWorkerTask } from './workers/costsWorkerClient.js';
 import { formatGoldColored, getRarityClass } from './bundle-utils-1.js';
+import fetchAggregateBundle from './utils/fetchAggregateBundle.js';
 
 const DEFAULT_ICON_URL = 'https://render.guildwars2.com/file/0120CB0368B7953F0D3BD2A0C9100BCF0839FF4D/219035.png';
 
@@ -167,6 +168,7 @@ class BagCraftingApp {
     this.bundleCache = new Map();
     this.itemDetailsCache = new Map();
     this.priceCache = new Map();
+    this.aggregateMeta = null;
     this.workerTotals = { totalBuy: 0, totalSell: 0, totalCrafted: 0 };
     this.currentTree = null;
     this.currentBag = null;
@@ -442,14 +444,93 @@ class BagCraftingApp {
       return;
     }
 
+    const numericIds = ids
+      .map(id => Number(id))
+      .filter(id => Number.isFinite(id) && id > 0);
+
+    const applyDetailUpdates = (itemId, updates = {}) => {
+      const key = String(itemId);
+      const existing = this.itemDetailsCache.get(key) || {};
+      const next = { ...existing, id: itemId };
+      if (updates.name != null && !next.name) {
+        next.name = updates.name;
+      }
+      if (updates.type != null && !next.type) {
+        next.type = updates.type;
+      }
+      if (updates.rarity != null) {
+        next.rarity = updates.rarity;
+      }
+      if (updates.icon) {
+        next.icon = updates.icon;
+      }
+      this.itemDetailsCache.set(key, next);
+    };
+
     try {
-      const bundles = await getItemBundles(ids);
+      const aggregate = await fetchAggregateBundle(numericIds, {
+        fields: 'priceMap,iconMap,rarityMap,itemMap',
+      });
+
+      aggregate.priceMap.forEach((value, id) => {
+        const key = String(id);
+        const buy = Number.isFinite(value?.buy_price) ? value.buy_price : null;
+        const sell = Number.isFinite(value?.sell_price) ? value.sell_price : null;
+        this.priceCache.set(key, { buy_price: buy, sell_price: sell });
+      });
+
+      aggregate.iconMap.forEach((icon, id) => {
+        if (!icon) return;
+        applyDetailUpdates(Number(id), { icon: normalizeIcon(icon) });
+      });
+
+      aggregate.rarityMap.forEach((rarity, id) => {
+        if (rarity) {
+          applyDetailUpdates(Number(id), { rarity });
+        }
+      });
+
+      if (aggregate.itemMap) {
+        aggregate.itemMap.forEach((item, id) => {
+          if (!item || typeof item !== 'object') {
+            return;
+          }
+          const updates = {
+            name: item.name ?? null,
+            type: item.type ?? null,
+            rarity: item.rarity ?? null,
+          };
+          if (item.icon) {
+            updates.icon = normalizeIcon(item.icon);
+          }
+          applyDetailUpdates(Number(id), updates);
+        });
+      }
+
+      this.aggregateMeta = aggregate.meta || null;
+    } catch (error) {
+      console.warn('[BagCraftingApp] No se pudo precargar el agregado de bundle', error);
+    }
+
+    const missingForLegacy = numericIds.filter((itemId) => {
+      const key = String(itemId);
+      const hasDetails = this.itemDetailsCache.has(key);
+      const hasPrice = this.priceCache.has(key);
+      return !(hasDetails && hasPrice);
+    });
+
+    if (missingForLegacy.length === 0) {
+      return;
+    }
+
+    try {
+      const bundles = await getItemBundles(missingForLegacy);
       if (!Array.isArray(bundles)) {
         return;
       }
 
       bundles.forEach((bundle, index) => {
-        const itemId = ids[index];
+        const itemId = missingForLegacy[index];
         this.storeBundleInCaches(itemId, bundle);
       });
     } catch (error) {

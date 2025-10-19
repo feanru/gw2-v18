@@ -3369,7 +3369,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
 
   if (aggregateResult.resolved) {
     const normalizedIds = aggregateResult.ids;
-    const { priceMap, iconMap, rarityMap } = aggregateHelpers.buildMapsFromEntries(
+    const { priceMap, iconMap, rarityMap, itemMap } = aggregateHelpers.buildMapsFromEntries(
       normalizedIds,
       aggregateResult.entries,
     );
@@ -3383,7 +3383,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     });
     const enrichedMeta = { ...meta, pagination };
     const payload = aggregateHelpers.filterAggregateBundlePayload(
-      { priceMap, iconMap, rarityMap, meta: enrichedMeta },
+      { priceMap, iconMap, rarityMap, itemMap, meta: enrichedMeta },
       fields,
     );
     if (errors.length > 0) {
@@ -3429,7 +3429,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     pagedIds,
     fallbackPayload.data || {},
   );
-  const { priceMap, iconMap, rarityMap } = aggregateHelpers.buildMapsFromEntries(
+  const { priceMap, iconMap, rarityMap, itemMap } = aggregateHelpers.buildMapsFromEntries(
     pagedIds,
     fallbackEntries,
   );
@@ -3443,7 +3443,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
   });
   const enrichedMeta = { ...meta, pagination };
   const payload = aggregateHelpers.filterAggregateBundlePayload(
-    { priceMap, iconMap, rarityMap, meta: enrichedMeta },
+    { priceMap, iconMap, rarityMap, itemMap, meta: enrichedMeta },
     fields,
   );
   if (errors.length > 0) {
