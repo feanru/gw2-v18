@@ -1,155 +1,9 @@
 // Bundled legendary crafting scripts
-import { getCached, setCached, fetchDedup } from './utils/cache.js';
+import { clearCachedPrefix } from './utils/cache.js';
 import { getPrice, clearCache as clearPriceCache } from './utils/priceHelper.js';
 import { runCostsWorkerTask } from './workers/costsWorkerClient.js';
 import fetchAggregateBundle from './utils/fetchAggregateBundle.js';
-/**
- * Servicio para interactuar con la API de Guild Wars 2
- */
-class GuildWars2API {
-  constructor() {
-    this.BASE_URL = 'https://api.guildwars2.com/v2';
-    this.ITEMS_ENDPOINT = `${this.BASE_URL}/items`;
-    this.PRICES_ENDPOINT = `${this.BASE_URL}/commerce/prices`;
-    this.RECIPES_ENDPOINT = `${this.BASE_URL}/recipes/search`;
-    this.ITEMS_BULK_ENDPOINT = `${this.BASE_URL}/items?ids=`;
-    
-    // Configuración de caché
-    this.CACHE_PREFIX = 'gw2_api_cache_';
-    this.CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 horas en milisegundos
-  }
-
-  /**
-   * Realiza una petición a la API con manejo de caché
-   */
-  async _fetchWithCache(url, useCache = true) {
-    const cacheKey = this.CACHE_PREFIX + btoa(url);
-    if (useCache) {
-      const cached = getCached(cacheKey);
-      if (cached) return cached;
-    }
-    try {
-      const response = await fetchDedup(url);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      // Clone the response to parse the body without consuming the original
-      const cloned = response.clone();
-      const data = await cloned.json();
-
-      if (useCache) {
-        setCached(cacheKey, data, this.CACHE_DURATION);
-      }
-      return data;
-    } catch (error) {
-      console.error('Error en la petición a la API:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Obtiene los precios de un ítem
-   */
-  async getItemPrices(itemId) {
-    const url = `${this.PRICES_ENDPOINT}/${itemId}`;
-    return this._fetchWithCache(url);
-  }
-
-  /**
-   * Obtiene los detalles de un ítem
-   */
-  async getItemDetails(itemId) {
-    try {
-      const url = `${this.ITEMS_ENDPOINT}/${itemId}?lang=es`;
-      const item = await this._fetchWithCache(url);
-      
-      if (!item) {
-        console.warn(`[getItemDetails] No se encontró el ítem con ID: ${itemId}`);
-        return null;
-      }
-      
-      // Registrar información de depuración
-      
-      // Si el ítem tiene un icono, lo normalizamos
-      if (item.icon) {
-        
-        // Si el icono ya es una URL completa, lo dejamos igual
-        if (item.icon.startsWith('http')) {
-        } 
-        // Si es una ruta relativa, la convertimos a URL completa
-        else {
-          // Eliminar cualquier prefijo 'file/' o '/' duplicado
-          const cleanPath = item.icon
-            .replace(/^file\//, '')  // Eliminar 'file/' al inicio
-            .replace(/^\//, '');     // Eliminar '/' al inicio
-            
-          item.icon = `https://render.guildwars2.com/file/${cleanPath}`;
-        }
-      } else {
-        // Si no hay icono, intentamos usar el ID del ítem
-        console.warn(`[getItemDetails] El ítem ${itemId} no tiene icono definido`);
-        item.icon = `https://render.guildwars2.com/file/${itemId}.png`;
-      }
-      
-      return item;
-      
-    } catch (error) {
-      console.error(`[getItemDetails] Error al obtener detalles del ítem ${itemId}:`, error);
-      
-      // Si hay un error, devolvemos un objeto con la información básica
-      return {
-        id: itemId,
-        name: `Item ${itemId}`,
-        icon: 'https://render.guildwars2.com/file/0120CB0368B7953F0D3BD2A0C9100BCF0839FF4D/219035.png',
-        error: error.message
-      };
-    }
-  }
-
-  /**
-   * Obtiene múltiples ítems por sus IDs
-   */
-  async getItemsBulk(itemIds) {
-    if (!itemIds || !itemIds.length) return [];
-    const idsParam = itemIds.join(',');
-    const url = `${this.ITEMS_BULK_ENDPOINT}${idsParam}`;
-    return this._fetchWithCache(url);
-  }
-
-  /**
-   * Busca recetas que usan un ítem específico
-   */
-  async findRecipesForItem(itemId) {
-    const url = `${this.RECIPES_ENDPOINT}?output=${itemId}`;
-    const recipeIds = await this._fetchWithCache(url);
-    
-    if (!recipeIds || !recipeIds.length) return [];
-    
-    // Obtener detalles de las recetas
-    const recipesUrl = `${this.BASE_URL}/recipes?ids=${recipeIds.join(',')}`;
-    return this._fetchWithCache(recipesUrl);
-  }
-
-  /**
-   * Limpia la caché de la API
-   */
-  clearCache() {
-    try {
-      Object.keys(localStorage).forEach(key => {
-        if (key.startsWith(this.CACHE_PREFIX)) {
-          localStorage.removeItem(key);
-        }
-      });
-      return true;
-    } catch (e) {
-      console.error('Error al limpiar la caché:', e);
-      return false;
-    }
-  }
-}
-
-const gw2API = new GuildWars2API();
+import { getItemBundles, getItemDetails } from './services/recipeService.js';
 
 function normalizeIcon(icon) {
   if (!icon) return null;
@@ -188,6 +42,99 @@ function clearLegendaryAggregateCache() {
   legendaryAggregateCache.prices.clear();
   legendaryAggregateCache.items.clear();
   legendaryAggregateCache.meta = null;
+}
+
+function mergeAggregateItem(itemId, updates = {}) {
+  const numericId = Number(itemId);
+  if (!Number.isFinite(numericId) || numericId <= 0) {
+    return null;
+  }
+  const base = legendaryAggregateCache.items.get(numericId) || { id: numericId };
+  const next = { ...base, id: numericId };
+  if (updates.name != null) {
+    next.name = updates.name;
+  }
+  if (updates.type != null) {
+    next.type = updates.type;
+  }
+  if (updates.rarity != null) {
+    next.rarity = updates.rarity;
+  }
+  if (updates.level != null) {
+    next.level = updates.level;
+  }
+  if (typeof updates.icon === 'string' && updates.icon) {
+    next.icon = normalizeIcon(updates.icon);
+  }
+  legendaryAggregateCache.items.set(numericId, next);
+  return next;
+}
+
+function mergeAggregatePrice(itemId, value) {
+  const numericId = Number(itemId);
+  if (!Number.isFinite(numericId) || numericId <= 0) {
+    return;
+  }
+  const buy = Number.isFinite(value?.buy_price) ? value.buy_price : null;
+  const sell = Number.isFinite(value?.sell_price) ? value.sell_price : null;
+  if (buy == null && sell == null) {
+    return;
+  }
+  legendaryAggregateCache.prices.set(numericId, { buy_price: buy, sell_price: sell });
+}
+
+function normalizeMarketEntry(market) {
+  if (!market || typeof market !== 'object') {
+    return null;
+  }
+  const buy = Number.isFinite(market.buy_price)
+    ? market.buy_price
+    : Number.isFinite(market.buys?.unit_price)
+      ? market.buys.unit_price
+      : null;
+  const sell = Number.isFinite(market.sell_price)
+    ? market.sell_price
+    : Number.isFinite(market.sells?.unit_price)
+      ? market.sells.unit_price
+      : null;
+  if (buy == null && sell == null) {
+    return null;
+  }
+  return { buy_price: buy, sell_price: sell };
+}
+
+function storeBundleInAggregateCache(itemId, bundle) {
+  if (!bundle) {
+    return;
+  }
+  if (bundle.item) {
+    mergeAggregateItem(itemId, bundle.item);
+  }
+  const market = normalizeMarketEntry(bundle.market);
+  if (market) {
+    mergeAggregatePrice(itemId, market);
+  }
+}
+
+async function loadItemDetails(itemId) {
+  const numericId = Number(itemId);
+  if (!Number.isFinite(numericId) || numericId <= 0) {
+    return null;
+  }
+  const cached = legendaryAggregateCache.items.get(numericId);
+  if (cached && (cached.name || cached.type || cached.rarity || cached.icon)) {
+    return cached;
+  }
+  try {
+    const details = await getItemDetails(numericId);
+    if (details) {
+      const stored = mergeAggregateItem(numericId, details);
+      return stored || details;
+    }
+  } catch (error) {
+    console.warn(`[LegendaryCrafting] No se pudo obtener detalles para ${itemId}`, error);
+  }
+  return cached || null;
 }
 
 function collectComponentIds(item, acc = new Set(), visited = new Set()) {
@@ -232,66 +179,54 @@ async function preloadLegendaryAggregate(ids = []) {
     });
 
     aggregate.priceMap.forEach((value, id) => {
-      const numericId = Number(id);
-      const buy = Number.isFinite(value?.buy_price) ? value.buy_price : null;
-      const sell = Number.isFinite(value?.sell_price) ? value.sell_price : null;
-      legendaryAggregateCache.prices.set(numericId, { buy_price: buy, sell_price: sell });
-    });
-
-    pending.forEach((id) => {
-      if (!legendaryAggregateCache.items.has(id)) {
-        legendaryAggregateCache.items.set(id, { id });
-      }
+      mergeAggregatePrice(id, value);
     });
 
     if (aggregate.iconMap) {
       aggregate.iconMap.forEach((icon, id) => {
-        const numericId = Number(id);
-        const existing = legendaryAggregateCache.items.get(numericId) || { id: numericId };
-        if (icon) {
-          existing.icon = normalizeIcon(icon);
+        if (typeof icon === 'string' && icon) {
+          mergeAggregateItem(id, { icon });
         }
-        legendaryAggregateCache.items.set(numericId, existing);
       });
     }
 
     if (aggregate.rarityMap) {
       aggregate.rarityMap.forEach((rarity, id) => {
-        const numericId = Number(id);
-        const existing = legendaryAggregateCache.items.get(numericId) || { id: numericId };
         if (rarity) {
-          existing.rarity = rarity;
+          mergeAggregateItem(id, { rarity });
         }
-        legendaryAggregateCache.items.set(numericId, existing);
       });
     }
 
     if (aggregate.itemMap) {
       aggregate.itemMap.forEach((item, id) => {
-        const numericId = Number(id);
-        const existing = legendaryAggregateCache.items.get(numericId) || { id: numericId };
         if (item && typeof item === 'object') {
-          if (item.name && !existing.name) {
-            existing.name = item.name;
-          }
-          if (item.type && !existing.type) {
-            existing.type = item.type;
-          }
-          if (item.rarity) {
-            existing.rarity = item.rarity;
-          }
-          if (item.icon) {
-            existing.icon = normalizeIcon(item.icon);
-          }
-          if (item.level != null && !('level' in existing)) {
-            existing.level = item.level;
-          }
+          mergeAggregateItem(id, item);
         }
-        legendaryAggregateCache.items.set(numericId, existing);
       });
     }
 
     legendaryAggregateCache.meta = aggregate.meta || legendaryAggregateCache.meta || null;
+
+    const missingForLegacy = pending.filter((id) => {
+      const itemEntry = legendaryAggregateCache.items.get(id);
+      const priceEntry = legendaryAggregateCache.prices.get(id);
+      return !(itemEntry && priceEntry);
+    });
+
+    if (missingForLegacy.length > 0) {
+      try {
+        const bundles = await getItemBundles(missingForLegacy);
+        bundles.forEach((bundle, index) => {
+          const itemId = missingForLegacy[index];
+          if (bundle) {
+            storeBundleInAggregateCache(itemId, bundle);
+          }
+        });
+      } catch (fallbackError) {
+        console.warn('[LegendaryCrafting] No se pudieron precargar bundles de respaldo', fallbackError);
+      }
+    }
   } catch (error) {
     console.warn('[LegendaryCrafting] No se pudo precargar el agregado de bundle', error);
   }
@@ -346,8 +281,7 @@ class Ingredient {
     }
 
     try {
-      // Obtener los detalles del ítem utilizando el servicio con caché
-      const itemData = await gw2API.getItemDetails(this.id);
+      const itemData = await loadItemDetails(this.id);
 
       if (itemData && itemData.icon) {
         this._icon = itemData.icon;
@@ -562,12 +496,7 @@ async function createIngredientTree1(itemData, parent = null) {
 
   let apiDetails = getAggregateItem(itemData.id);
   if (!apiDetails) {
-    try {
-      apiDetails = await gw2API.getItemDetails(itemData.id);
-    } catch (error) {
-      console.warn(`[LegendaryCrafting] No se pudo obtener detalles para ${itemData.id}`, error);
-      apiDetails = null;
-    }
+    apiDetails = await loadItemDetails(itemData.id);
   }
 
   // Crear el ingrediente con los datos básicos
@@ -741,12 +670,7 @@ async function createIngredientTree3(itemData, parent = null) {
 
   let apiDetails = getAggregateItem(itemData.id);
   if (!apiDetails) {
-    try {
-      apiDetails = await gw2API.getItemDetails(itemData.id);
-    } catch (error) {
-      console.warn(`[LegendaryCrafting] No se pudo obtener detalles para ${itemData.id}`, error);
-      apiDetails = null;
-    }
+    apiDetails = await loadItemDetails(itemData.id);
   }
 
   // Crear el ingrediente con los datos básicos
@@ -3212,12 +3136,27 @@ class LegendaryCraftingBase {
   }
 
   clearCache() {
-      const successGW2 = gw2API.clearCache();
-      const successDW2 = clearPriceCache ? clearPriceCache() : true;
-      clearLegendaryAggregateCache();
-      if (successGW2 && successDW2) {
+    const snapshotId = legendaryAggregateCache.meta?.snapshotId || null;
+    const clearedBundles = clearCachedPrefix ? clearCachedPrefix('bundle_') : 0;
+    const successPrices = clearPriceCache ? clearPriceCache() : true;
+    clearLegendaryAggregateCache();
+
+    if (snapshotId && typeof window !== 'undefined') {
+      try {
+        window.navigator?.serviceWorker?.controller?.postMessage({
+          type: 'invalidateMany',
+          snapshotIds: [snapshotId],
+        });
+      } catch (err) {
+        console.warn('[LegendaryCrafting] No se pudo notificar al service worker', err);
+      }
+    }
+
+    if (successPrices !== false && clearedBundles >= 0) {
       alert('Caché limpiado correctamente');
-      if (this.currentTree) this.loadItem({ itemId: this.itemIdInput?.value, itemName: this.itemNameInput?.value });
+      if (this.currentTree) {
+        this.loadItem({ itemId: this.itemIdInput?.value, itemName: this.itemNameInput?.value });
+      }
     } else {
       alert('Error al limpiar la caché');
     }
