@@ -861,6 +861,16 @@ function resetLegacyOverrides() {
   legacyBundleHandler = createLegacyBundleHandlerInstance();
 }
 
+function setLegacyBundleHandlerOverride(handler) {
+  if (typeof handler === 'function') {
+    legacyBundleHandler = handler;
+  }
+}
+
+function resetLegacyBundleHandlerOverride() {
+  legacyBundleHandler = createLegacyBundleHandlerInstance();
+}
+
 async function getMongoClient() {
   if (mongoClientPromise) {
     return mongoClientPromise;
@@ -3532,24 +3542,65 @@ async function handleGetItemBundle(req, res, url, lang) {
       buffer = Buffer.from(String(chunk));
     }
 
-    let finalBuffer = buffer;
-    try {
-      const payload = JSON.parse(buffer.toString('utf8') || '{}');
-      if (payload && typeof payload === 'object') {
-        const meta = { ...(payload.meta || {}) };
-        meta.source = 'fallback';
-        payload.meta = meta;
-        finalBuffer = Buffer.from(JSON.stringify(payload), 'utf8');
+    const text = buffer.toString('utf8');
+    let payload = null;
+    let parseError = null;
+    if (text.trim() !== '') {
+      try {
+        payload = JSON.parse(text);
+      } catch (err) {
+        parseError = err;
       }
-    } catch (err) {
-      finalBuffer = buffer;
     }
 
-    storedHeaders['Content-Length'] = Buffer.byteLength(finalBuffer);
+    if (!payload || typeof payload !== 'object') {
+      responseEnded = true;
+      res.writeHead = originalWriteHead;
+      res.end = originalEnd;
+      if (originalSetHeader) {
+        res.setHeader = originalSetHeader;
+      } else {
+        delete res.setHeader;
+      }
 
-    originalWriteHead.call(this, storedStatus ?? 200, storedHeaders);
+      const status = storedStatus && storedStatus >= 400 ? storedStatus : 502;
+      const errorList = [];
+      if (parseError) {
+        errorList.push({
+          code: 'fallback_invalid_json',
+          msg: parseError.message || 'Legacy bundle response was not valid JSON',
+        });
+      } else {
+        errorList.push({
+          code: 'fallback_empty_payload',
+          msg: 'Legacy bundle response was empty or invalid',
+        });
+      }
+
+      fail(
+        res,
+        status,
+        'aggregate_fallback_invalid',
+        'Legacy bundle response invalid',
+        { lang, source: 'fallback', stale: true },
+        errorList,
+      );
+      return;
+    }
+
+    const meta = { ...(payload.meta || {}) };
+    meta.source = 'fallback';
+    payload.meta = meta;
+
+    const finalBody = JSON.stringify(payload);
+    storedHeaders['Content-Type'] = 'application/json; charset=utf-8';
+    delete storedHeaders['content-type'];
+    storedHeaders['Content-Length'] = Buffer.byteLength(finalBody);
+
+    const statusCode = storedStatus ?? 200;
+    originalWriteHead.call(this, statusCode, storedHeaders);
     responseEnded = true;
-    return originalEnd.call(this, finalBuffer, undefined, cb);
+    return originalEnd.call(this, finalBody, undefined, cb);
   };
 
   try {
@@ -4053,6 +4104,8 @@ module.exports.getDashboardSnapshotCached = getDashboardSnapshotCached;
 module.exports.invalidateDashboardSnapshotCache = invalidateDashboardSnapshotCache;
 module.exports.__setLegacyOverrides = setLegacyOverrides;
 module.exports.__resetLegacyOverrides = resetLegacyOverrides;
+module.exports.__setLegacyBundleHandler = setLegacyBundleHandlerOverride;
+module.exports.__resetLegacyBundleHandler = resetLegacyBundleHandlerOverride;
 
 module.exports.__setAggregateOverrides = (overrides = {}) => {
   if (overrides.buildItemAggregate) {
