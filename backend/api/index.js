@@ -2978,7 +2978,59 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
   let snapshotTtlMs = null;
   let cacheAgeMs = null;
   let cacheStoredAt = null;
+  let firstByteAt = null;
+  let responseSizeBytes = 0;
   const fields = aggregateHelpers.parseAggregateFields(url?.searchParams?.get('fields'));
+
+  const originalWriteHead = res.writeHead.bind(res);
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+
+  const markFirstByte = () => {
+    if (firstByteAt === null) {
+      firstByteAt = process.hrtime.bigint();
+    }
+  };
+
+  const addChunkSize = (chunk, encoding) => {
+    if (!chunk) {
+      return;
+    }
+    if (Buffer.isBuffer(chunk)) {
+      responseSizeBytes += chunk.length;
+      return;
+    }
+    if (typeof chunk === 'string') {
+      const enc = typeof encoding === 'string' ? encoding : undefined;
+      responseSizeBytes += Buffer.byteLength(chunk, enc);
+      return;
+    }
+    try {
+      const buffer = Buffer.from(chunk);
+      responseSizeBytes += buffer.length;
+    } catch (err) {
+      // ignore non-bufferable chunks
+    }
+  };
+
+  res.writeHead = function patchedWriteHead(...args) {
+    markFirstByte();
+    return originalWriteHead(...args);
+  };
+
+  res.write = function patchedWrite(chunk, encoding, cb) {
+    markFirstByte();
+    addChunkSize(chunk, encoding);
+    return originalWrite(chunk, encoding, cb);
+  };
+
+  res.end = function patchedEnd(chunk, encoding, cb) {
+    if (chunk) {
+      addChunkSize(chunk, encoding);
+    }
+    markFirstByte();
+    return originalEnd(chunk, encoding, cb);
+  };
   try {
     const cacheLookupStart = process.hrtime.bigint();
     cached = await getCachedAggregateFn(itemId, lang);
@@ -3163,15 +3215,11 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
     }
   } finally {
     const elapsed = Number(process.hrtime.bigint() - start) / 1e6;
-    const context = getResponseContext(res);
-    const responseMetrics =
-      context && context.__responseMetrics ? context.__responseMetrics : null;
-    const metricsFirstByte = responseMetrics?.firstByteAt ?? null;
-    const responseSizeBytes = Number.isFinite(responseMetrics?.responseSizeBytes)
-      ? Number(responseMetrics.responseSizeBytes)
-      : null;
     const ttfbMs =
-      metricsFirstByte != null ? Number(metricsFirstByte - start) / 1e6 : null;
+      firstByteAt != null ? Number(firstByteAt - start) / 1e6 : null;
+    res.writeHead = originalWriteHead;
+    res.write = originalWrite;
+    res.end = originalEnd;
     recordAggregateMetric({
       statusCode,
       stale,

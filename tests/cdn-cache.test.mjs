@@ -66,7 +66,7 @@ async function startCdnServer() {
       const buffer = await fs.readFile(resolved);
       const etag = `"${crypto.createHash('sha1').update(buffer).digest('hex')}"`;
       res.writeHead(200, {
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=60',
         ETag: etag,
         'Content-Length': buffer.length,
         'Content-Type': guessContentType(resolved),
@@ -112,13 +112,14 @@ async function run() {
       const response = await fetch(`${baseUrl}${asset}`);
       assert.strictEqual(response.status, 200, `${asset} responded with ${response.status}`);
       const cacheControl = response.headers.get('cache-control');
+      assert.ok(cacheControl && cacheControl.includes('public'), `${asset} should be cacheable by shared proxies`);
       assert.ok(
-        cacheControl && cacheControl.includes('max-age=31536000'),
-        `${asset} should include max-age directive`,
+        cacheControl && cacheControl.includes('s-maxage=3600'),
+        `${asset} should include s-maxage directive`,
       );
       assert.ok(
-        cacheControl && cacheControl.includes('immutable'),
-        `${asset} should be immutable`,
+        cacheControl && cacheControl.includes('stale-while-revalidate=60'),
+        `${asset} should include stale-while-revalidate directive`,
       );
       const etag = response.headers.get('etag');
       assert.ok(etag && etag.length > 0, `${asset} should expose an ETag`);
