@@ -1,5 +1,6 @@
 import fetchWithRetry from './utils/fetchWithRetry.js';
 import fetchAggregateBundle from './utils/fetchAggregateBundle.js';
+import { showSkeleton, hideSkeleton } from './ui-helpers.js';
 // Bundled forja mistica scripts
 // Utilidades compartidas para fractales y forja mística
 const iconCache = {};
@@ -183,101 +184,125 @@ function formatValueWithMissing({ value, missing }) {
 }
 
 async function renderTablaForja() {
-  const keys = Object.keys(MATERIAL_IDS.t5);
-  const ids = [
-    ...keys.map(k => MATERIAL_IDS.t5[k]),
-    ...keys.map(k => MATERIAL_IDS.t6[k]),
-    MATERIAL_IDS.polvo,
-    MATERIAL_IDS.piedra
-  ];
-  const priceMap = await fetchItemPrices(ids);
-  await fetchIconsFor(ids);
+  const skeleton = document.getElementById('forja-skeleton');
+  const table = document.getElementById('tabla-forja-mistica');
+  showSkeleton(skeleton);
+  if (table) table.classList.add('hidden');
 
-  keys.forEach(key => {
-    const row = document.querySelector(`#matt5t6 tr[data-key="${key}"]`);
-    if (!row) return;
-    const sumEl = row.querySelector('.sum-mats');
-    const resEl = row.querySelector('.resultado');
-    const profitEl = row.querySelector('.profit');
+  try {
+    const keys = Object.keys(MATERIAL_IDS.t5);
+    const ids = [
+      ...keys.map(k => MATERIAL_IDS.t5[k]),
+      ...keys.map(k => MATERIAL_IDS.t6[k]),
+      MATERIAL_IDS.polvo,
+      MATERIAL_IDS.piedra
+    ];
+    const priceMap = await fetchItemPrices(ids);
+    await fetchIconsFor(ids);
 
-    const precioT5 = resolvePrice(MATERIAL_IDS.t5[key], priceMap, 'buy_price');
-    const precioT6Buy = resolvePrice(MATERIAL_IDS.t6[key], priceMap, 'buy_price');
-    const precioT6Sell = resolvePrice(MATERIAL_IDS.t6[key], priceMap, 'sell_price');
-    const precioPolvo = resolvePrice(MATERIAL_IDS.polvo, priceMap, 'buy_price');
-    const precioPiedra = resolvePrice(MATERIAL_IDS.piedra, priceMap, 'buy_price');
+    keys.forEach(key => {
+      const row = document.querySelector(`#matt5t6 tr[data-key="${key}"]`);
+      if (!row) return;
+      const sumEl = row.querySelector('.sum-mats');
+      const resEl = row.querySelector('.resultado');
+      const profitEl = row.querySelector('.profit');
 
-    const sumMats = sumPrices([
-      { priceInfo: precioT5, quantity: 50 },
-      { priceInfo: precioPolvo, quantity: 5 },
-      { priceInfo: precioPiedra, quantity: 5 },
-      { priceInfo: precioT6Buy }
-    ]);
-    const resultadoBruto = computeValue(precioT6Sell, 6.91);
-    const resultadoNeto = { value: resultadoBruto.value * 0.85, missing: resultadoBruto.missing }; // 15% comisión bazar
-    const profit = {
-      value: resultadoNeto.value - sumMats.value,
-      missing: resultadoNeto.missing || sumMats.missing
-    };
+      const precioT5 = resolvePrice(MATERIAL_IDS.t5[key], priceMap, 'buy_price');
+      const precioT6Buy = resolvePrice(MATERIAL_IDS.t6[key], priceMap, 'buy_price');
+      const precioT6Sell = resolvePrice(MATERIAL_IDS.t6[key], priceMap, 'sell_price');
+      const precioPolvo = resolvePrice(MATERIAL_IDS.polvo, priceMap, 'buy_price');
+      const precioPiedra = resolvePrice(MATERIAL_IDS.piedra, priceMap, 'buy_price');
 
-    if (sumEl) sumEl.innerHTML = formatValueWithMissing(sumMats);
-    if (resEl) resEl.innerHTML = formatValueWithMissing(resultadoNeto);
-    if (profitEl) profitEl.innerHTML = formatValueWithMissing(profit);
+      const sumMats = sumPrices([
+        { priceInfo: precioT5, quantity: 50 },
+        { priceInfo: precioPolvo, quantity: 5 },
+        { priceInfo: precioPiedra, quantity: 5 },
+        { priceInfo: precioT6Buy }
+      ]);
+      const resultadoBruto = computeValue(precioT6Sell, 6.91);
+      const resultadoNeto = { value: resultadoBruto.value * 0.85, missing: resultadoBruto.missing }; // 15% comisión bazar
+      const profit = {
+        value: resultadoNeto.value - sumMats.value,
+        missing: resultadoNeto.missing || sumMats.missing
+      };
 
-    const cells = row.querySelectorAll('td');
-    addIconToCell(cells[0], iconCache[MATERIAL_IDS.t5[key]]);
-    addIconToCell(cells[1], iconCache[MATERIAL_IDS.t6[key]]);
-    addIconToCell(cells[2], iconCache[MATERIAL_IDS.polvo]);
-    addIconToCell(cells[3], iconCache[MATERIAL_IDS.piedra]);
-  });
+      if (sumEl) sumEl.innerHTML = formatValueWithMissing(sumMats);
+      if (resEl) resEl.innerHTML = formatValueWithMissing(resultadoNeto);
+      if (profitEl) profitEl.innerHTML = formatValueWithMissing(profit);
+
+      const cells = row.querySelectorAll('td');
+      addIconToCell(cells[0], iconCache[MATERIAL_IDS.t5[key]]);
+      addIconToCell(cells[1], iconCache[MATERIAL_IDS.t6[key]]);
+      addIconToCell(cells[2], iconCache[MATERIAL_IDS.polvo]);
+      addIconToCell(cells[3], iconCache[MATERIAL_IDS.piedra]);
+    });
+  } catch (err) {
+    console.error('Error al renderizar la tabla de la forja mística:', err);
+  } finally {
+    hideSkeleton(skeleton);
+    if (table) table.classList.remove('hidden');
+  }
 }
 
 async function renderTablaLodestones() {
-  const coreKeys = Object.keys(LODESTONE_IDS.cores);
-  const ids = [
-    ...coreKeys.map(k => LODESTONE_IDS.cores[k]),
-    ...coreKeys.map(k => LODESTONE_IDS.stones[k]),
-    LODESTONE_IDS.polvo,
-    LODESTONE_IDS.botella,
-    LODESTONE_IDS.cristal
-  ];
+  const skeleton = document.getElementById('lodestones-skeleton');
+  const table = document.getElementById('tabla-lodestones');
+  showSkeleton(skeleton);
+  if (table) table.classList.add('hidden');
 
-  const priceMap = await fetchItemPrices(ids);
-  await fetchIconsFor(ids);
+  try {
+    const coreKeys = Object.keys(LODESTONE_IDS.cores);
+    const ids = [
+      ...coreKeys.map(k => LODESTONE_IDS.cores[k]),
+      ...coreKeys.map(k => LODESTONE_IDS.stones[k]),
+      LODESTONE_IDS.polvo,
+      LODESTONE_IDS.botella,
+      LODESTONE_IDS.cristal
+    ];
 
-  coreKeys.forEach(key => {
-    const row = document.querySelector(`#tabla-lodestones tr[data-key="${key}"]`);
-    if (!row) return;
-    const sumEl = row.querySelector('.sum-mats');
-    const profitEl = row.querySelector('.profit');
+    const priceMap = await fetchItemPrices(ids);
+    await fetchIconsFor(ids);
 
-    const precioCore = resolvePrice(LODESTONE_IDS.cores[key], priceMap, 'buy_price');
-    const precioLodestoneSell = resolvePrice(LODESTONE_IDS.stones[key], priceMap, 'sell_price');
-    const precioPolvo = resolvePrice(LODESTONE_IDS.polvo, priceMap, 'buy_price');
-    const precioBotella = resolvePrice(LODESTONE_IDS.botella, priceMap, 'buy_price');
-    const precioCristal = resolvePrice(LODESTONE_IDS.cristal, priceMap, 'buy_price');
+    coreKeys.forEach(key => {
+      const row = document.querySelector(`#tabla-lodestones tr[data-key="${key}"]`);
+      if (!row) return;
+      const sumEl = row.querySelector('.sum-mats');
+      const profitEl = row.querySelector('.profit');
 
-    const sumMats = sumPrices([
-      { priceInfo: precioCore, quantity: 2 },
-      { priceInfo: precioPolvo },
-      { priceInfo: precioBotella },
-      { priceInfo: precioCristal }
-    ]);
-    const resultadoNeto = computeValue(precioLodestoneSell, 0.85); // comisión bazar 15%
-    const profit = {
-      value: resultadoNeto.value - sumMats.value,
-      missing: resultadoNeto.missing || sumMats.missing
-    };
+      const precioCore = resolvePrice(LODESTONE_IDS.cores[key], priceMap, 'buy_price');
+      const precioLodestoneSell = resolvePrice(LODESTONE_IDS.stones[key], priceMap, 'sell_price');
+      const precioPolvo = resolvePrice(LODESTONE_IDS.polvo, priceMap, 'buy_price');
+      const precioBotella = resolvePrice(LODESTONE_IDS.botella, priceMap, 'buy_price');
+      const precioCristal = resolvePrice(LODESTONE_IDS.cristal, priceMap, 'buy_price');
 
-    if (sumEl) sumEl.innerHTML = formatValueWithMissing(sumMats);
-    if (profitEl) profitEl.innerHTML = formatValueWithMissing(profit);
+      const sumMats = sumPrices([
+        { priceInfo: precioCore, quantity: 2 },
+        { priceInfo: precioPolvo },
+        { priceInfo: precioBotella },
+        { priceInfo: precioCristal }
+      ]);
+      const resultadoNeto = computeValue(precioLodestoneSell, 0.85); // comisión bazar 15%
+      const profit = {
+        value: resultadoNeto.value - sumMats.value,
+        missing: resultadoNeto.missing || sumMats.missing
+      };
 
-    const cells = row.querySelectorAll('td');
-    addIconToCell(cells[0], iconCache[LODESTONE_IDS.cores[key]]);
-    addIconToCell(cells[1], iconCache[LODESTONE_IDS.polvo]);
-    addIconToCell(cells[2], iconCache[LODESTONE_IDS.botella]);
-    addIconToCell(cells[3], iconCache[LODESTONE_IDS.cristal]);
-    addIconToCell(cells[4], iconCache[LODESTONE_IDS.stones[key]]);
-  });
+      if (sumEl) sumEl.innerHTML = formatValueWithMissing(sumMats);
+      if (profitEl) profitEl.innerHTML = formatValueWithMissing(profit);
+
+      const cells = row.querySelectorAll('td');
+      addIconToCell(cells[0], iconCache[LODESTONE_IDS.cores[key]]);
+      addIconToCell(cells[1], iconCache[LODESTONE_IDS.polvo]);
+      addIconToCell(cells[2], iconCache[LODESTONE_IDS.botella]);
+      addIconToCell(cells[3], iconCache[LODESTONE_IDS.cristal]);
+      addIconToCell(cells[4], iconCache[LODESTONE_IDS.stones[key]]);
+    });
+  } catch (err) {
+    console.error('Error al renderizar la tabla de piedras imán:', err);
+  } finally {
+    hideSkeleton(skeleton);
+    if (table) table.classList.remove('hidden');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
