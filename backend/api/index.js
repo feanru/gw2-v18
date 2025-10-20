@@ -400,6 +400,7 @@ function writeNotModified(res, headers = {}) {
     ...headers,
     'Cache-Control': 'no-store, no-cache, must-revalidate',
   };
+  trackResponseMetrics(res, 0);
   res.writeHead(304, finalHeaders);
   res.end();
 }
@@ -512,6 +513,32 @@ function buildMeta(metaOverrides = {}, context = {}) {
   return meta;
 }
 
+function trackResponseMetrics(res, byteLength = 0) {
+  const context = getResponseContext(res);
+  if (!context || typeof context !== 'object') {
+    return;
+  }
+  if (!context.__responseMetrics) {
+    context.__responseMetrics = {
+      firstByteAt: null,
+      responseSizeBytes: 0,
+    };
+  }
+  const metrics = context.__responseMetrics;
+  if (metrics.firstByteAt == null) {
+    try {
+      metrics.firstByteAt = process.hrtime.bigint();
+    } catch (err) {
+      metrics.firstByteAt = null;
+    }
+  }
+  if (Number.isFinite(byteLength) && byteLength > 0) {
+    metrics.responseSizeBytes = (metrics.responseSizeBytes || 0) + byteLength;
+  } else if (!Number.isFinite(metrics.responseSizeBytes)) {
+    metrics.responseSizeBytes = 0;
+  }
+}
+
 function writeResponse(
   res,
   statusCode,
@@ -535,12 +562,14 @@ function writeResponse(
     payload.errors = normalizedErrors;
   }
   const body = JSON.stringify(payload);
+  const bodyLength = Buffer.byteLength(body);
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store, no-cache, must-revalidate',
     ...additionalHeaders,
   };
-  headers['Content-Length'] = Buffer.byteLength(body);
+  headers['Content-Length'] = bodyLength;
+  trackResponseMetrics(res, bodyLength);
   res.writeHead(statusCode, headers);
   res.end(body);
 }
