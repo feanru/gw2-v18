@@ -29,68 +29,79 @@
   </div>
   <div class="container">
     <main>
-      <div id="tab-promedios" class="tab-content active">
-        <div style="text-align: center;margin-bottom: 25px;">
-          <h2>Promedios por STACK de encriptaciones fractales</h2>
-          <p>Promedio de materiales obtenidos por apertura de un stack de encriptaciones fractales</p>
-        </div>
-        
-        <div class="card">
-          <table class="table-modern" id="tabla-fractales-gold">
-            
-            <tbody id="tabla-promedios"></tbody>
-          </table>
-        </div>
+      <div id="fractales-skeleton" class="card hidden" style="margin-top:32px;">
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
+        <div class="skeleton skeleton-result-line"></div>
       </div>
-      <div id="tab-precios" class="tab-content" style="display:none;">
-        <div class="card" style="margin-top:32px;">
+      <div id="fractales-content">
+        <div id="tab-promedios" class="tab-content active">
           <div style="text-align: center;margin-bottom: 25px;">
-            <h2>Precios unitarios de Materiales</h2>
-            <p>Promedio de ORO por materiales obtenidos por apertura de un stack de encriptaciones fractales</p>
+            <h2>Promedios por STACK de encriptaciones fractales</h2>
+            <p>Promedio de materiales obtenidos por apertura de un stack de encriptaciones fractales</p>
           </div>
-          <div id="tabla-precios-fractales"></div>
+
+          <div class="card">
+            <table class="table-modern" id="tabla-fractales-gold">
+
+              <tbody id="tabla-promedios"></tbody>
+            </table>
+          </div>
         </div>
-      </div>
-      <div id="tab-resumen" class="tab-content" style="display:none;">
-        <div class="card" style="margin-top:32px;">
-          <div style="text-align: center;margin-bottom: 25px;">
-            <h2>Resumen total (Oro crudo + materiales)</h2>
-            <p>Oro promedio por apertura de un stack de encriptaciones fractales</p>
+        <div id="tab-precios" class="tab-content" style="display:none;">
+          <div class="card" style="margin-top:32px;">
+            <div style="text-align: center;margin-bottom: 25px;">
+              <h2>Precios unitarios de Materiales</h2>
+              <p>Promedio de ORO por materiales obtenidos por apertura de un stack de encriptaciones fractales</p>
+            </div>
+            <div id="tabla-precios-fractales"></div>
           </div>
-          <div id="tabla-resumen-oro"></div>
-          <div style="text-align: center;margin-bottom: 25px;">
-            <p>Oro promedio por encriptación fractal</p>
-          </div>
-          <div id="tabla-resumen-oro-individual" style="margin-top:12px;"></div>
         </div>
-        <div class="card" style="margin-top:32px;">
-          <div style="text-align: center;margin-bottom: 25px;">
-            <h2>Contribución de oro por material</h2>
+        <div id="tab-resumen" class="tab-content" style="display:none;">
+          <div class="card" style="margin-top:32px;">
+            <div style="text-align: center;margin-bottom: 25px;">
+              <h2>Resumen total (Oro crudo + materiales)</h2>
+              <p>Oro promedio por apertura de un stack de encriptaciones fractales</p>
+            </div>
+            <div id="tabla-resumen-oro"></div>
+            <div style="text-align: center;margin-bottom: 25px;">
+              <p>Oro promedio por encriptación fractal</p>
+            </div>
+            <div id="tabla-resumen-oro-individual" style="margin-top:12px;"></div>
           </div>
-          <canvas id="contribuciones-chart" height="120"></canvas>
+          <div class="card" style="margin-top:32px;">
+            <div style="text-align: center;margin-bottom: 25px;">
+              <h2>Contribución de oro por material</h2>
+            </div>
+            <canvas id="contribuciones-chart" height="120"></canvas>
+          </div>
+          <div class="card" style="margin-top:32px;">
+            <div style="text-align: center;margin-bottom: 25px;">
+              <h2>Referencias para profit</h2>
+              <p>Valores de referencia para comparar el profit</p>
+            </div>
+            <p>Precio de referencia para saber si es mejor abrir o vender.</p>
+            <div id="tabla-referencias-profit">
+              <p>NOTA: Las matrices estabilizadoras fungen el papel de llaves, ya que se puede cambiar por llaves con el NPC de fractales. Y así obtener un valor por llave.
+                Y se toma como referencia para asignarle un valor a las llaves de encriptación. </p>
+            </div>
+
+          </div>
+          <div class="card" style="margin-top:32px;">
+            <div style="text-align: center;margin-bottom: 25px;">
+              <h2>Abrir vs Vender Encriptaciones</h2>
+            </div>
+            <canvas id="abrir-vs-vender-chart" height="120"></canvas>
+          </div>
         </div>
-        <div class="card" style="margin-top:32px;">
-          <div style="text-align: center;margin-bottom: 25px;">
-          <h2>Referencias para profit</h2>
-          <p>Valores de referencia para comparar el profit</p>
-          </div>
-          <p>Precio de referencia para saber si es mejor abrir o vender.</p>
-          <div id="tabla-referencias-profit">
-            <p>NOTA: Las matrices estabilizadoras fungen el papel de llaves, ya que se puede cambiar por llaves con el NPC de fractales. Y así obtener un valor por llave.
-              Y se toma como referencia para asignarle un valor a las llaves de encriptación. </p>
-          </div>
-          
-        </div>
-        <div class="card" style="margin-top:32px;">
-          <div style="text-align: center;margin-bottom: 25px;">
-            <h2>Abrir vs Vender Encriptaciones</h2>
-          </div>
-          <canvas id="abrir-vs-vender-chart" height="120"></canvas>
-        </div>
-      </div>
       <!-- inicio EXTRAS -->
-      <div id="tab-extras" class="tab-content" style="display:none;">
-        <div class="card" style="margin-top:32px;">
+        <div id="tab-extras" class="tab-content" style="display:none;">
+          <div class="card" style="margin-top:32px;">
           <div style="text-align: center;margin-bottom: 25px;">
             <h2>Extras</h2>
           </div>
@@ -167,7 +178,7 @@
           </table>          
         </div>
       </div>
-        </div>
+    </div>
 <!-- fin EXTRAS -->
     </main>
   </div>
@@ -180,6 +191,18 @@
     document.addEventListener('DOMContentLoaded', async () => {
       const ui = window.FractalesGoldUI;
       const utils = window.FractalesUtils;
+      const skeleton = document.getElementById('fractales-skeleton');
+      const content = document.getElementById('fractales-content');
+
+      function setLoadingState(isLoading) {
+        if (isLoading) {
+          skeleton?.classList.remove('hidden');
+          content?.classList.add('hidden');
+        } else {
+          skeleton?.classList.add('hidden');
+          content?.classList.remove('hidden');
+        }
+      }
 
       async function fetchPreciosFractales() {
         const priceMap = await utils.fetchItemPrices([75919, 73248]);
@@ -246,7 +269,16 @@
         ui.renderExtras(preciosFractales, 24.96);
       }
 
-      await renderTodo();
+      setLoadingState(true);
+      try {
+        await renderTodo();
+      } catch (error) {
+        console.error('renderTodo: error inesperado', error);
+        const fallbackMessage = 'No se pudo cargar la información de fractales. Intenta nuevamente más tarde.';
+        window.StorageUtils?.showToast?.(fallbackMessage, 'error');
+      } finally {
+        setLoadingState(false);
+      }
     });
   </script>
   <script type="module" src="/dist/0.14.77/js/bundle-auth-nav.min.js" defer></script>
