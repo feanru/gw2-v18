@@ -182,15 +182,9 @@ class BagCraftingApp {
   init() {
     if (!this.craftingTreeEl) return;
     this.registerButtons();
-
-    const defaultButton = this.buttons.find(btn => btn.classList.contains('active')) || this.buttons[0];
-    if (defaultButton) {
-      this.setActiveButton(defaultButton);
-      const itemId = defaultButton.getAttribute('data-item-id');
-      if (itemId) {
-        void this.loadBagById(itemId);
-      }
-    }
+    this.buttons.forEach(btn => btn.classList.remove('active'));
+    this.activeButton = null;
+    this.showPlaceholderMessage();
   }
 
   registerButtons() {
@@ -682,12 +676,21 @@ class BagCraftingApp {
     }
   }
 
-  showError(message) {
+  showPlaceholderMessage() {
+    this.showMessage('Selecciona una alforja para ver los detalles de crafteo.');
+  }
+
+  showMessage(message, { type = 'info', hideSummary = true } = {}) {
     if (!this.craftingTreeEl) return;
-    this.craftingTreeEl.innerHTML = `<div class="message error">${message}</div>`;
-    if (this.summaryEl) {
+    const typeClass = type === 'error' ? ' error' : '';
+    this.craftingTreeEl.innerHTML = `<div class="message${typeClass}">${message}</div>`;
+    if (hideSummary && this.summaryEl) {
       this.summaryEl.style.display = 'none';
     }
+  }
+
+  showError(message) {
+    this.showMessage(message, { type: 'error' });
   }
 
   clearMessage() {
