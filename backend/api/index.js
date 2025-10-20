@@ -3677,6 +3677,11 @@ module.exports.__resetRedisClient = () => {
   redisClientPromise = null;
 };
 
+module.exports.__getServerBinding = () => ({
+  host: API_HOST,
+  port: API_PORT,
+});
+
 Object.defineProperty(module.exports, 'readItemSnapshot', {
   configurable: true,
   enumerable: true,
