@@ -307,6 +307,11 @@ try {
     nginxConfig.includes('proxy_pass http://127.0.0.1:3300/api/;'),
     'nginx proxy_pass for backend API missing',
   );
+  assert.ok(nginxConfig.includes('location /api/ {'), 'nginx api proxy block missing');
+  assert.ok(
+    nginxConfig.includes('proxy_pass http://127.0.0.1:3300;'),
+    'nginx proxy_pass for /api missing or incorrect',
+  );
 } finally {
   await new Promise((resolve) => server.close(resolve));
   __resetLegacyOverrides();

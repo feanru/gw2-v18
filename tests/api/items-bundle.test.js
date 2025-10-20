@@ -124,6 +124,13 @@ async function testMissingIdsReturns400() {
   assert.ok(Array.isArray(payload.errors));
   assert.strictEqual(payload.errors[0].code, 'ids_required');
   assert.strictEqual(payload.meta.source, 'aggregate');
+  const contentTypeMissingIds =
+    response.headers['Content-Type'] ?? response.headers['content-type'];
+  assert.strictEqual(
+    contentTypeMissingIds,
+    'application/json; charset=utf-8',
+    'responses without ids should return JSON content-type',
+  );
 }
 
 async function testSuccessfulBundleResponse() {
@@ -197,6 +204,12 @@ async function testSuccessfulBundleResponse() {
   const cacheControlHeader =
     response.headers['cache-control'] ?? response.headers['Cache-Control'];
   assert.strictEqual(cacheControlHeader, 'public, max-age=120, stale-while-revalidate=120');
+  const contentType = response.headers['Content-Type'] ?? response.headers['content-type'];
+  assert.strictEqual(
+    contentType,
+    'application/json; charset=utf-8',
+    'bundle responses should expose JSON content-type',
+  );
 }
 
 async function testBundleUnexpectedError() {
