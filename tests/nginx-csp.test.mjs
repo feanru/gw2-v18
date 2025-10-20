@@ -13,7 +13,11 @@ if (!/add_header\s+Content-Security-Policy\s+\$csp\s+always;/.test(config)) {
   process.exitCode = 1;
 }
 
-if (!config.includes("\"connect-src 'self' https://www.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com; \"")) {
+if (
+  !/"connect-src 'self'\$cdn_connect_src https:\/\/www\.google-analytics\.com https:\/\/region1\.google-analytics\.com https:\/\/www\.googletagmanager\.com; "/.test(
+    config,
+  )
+) {
   console.error('El bloque connect-src endurecido no se encontró en la definición CSP.');
   process.exitCode = 1;
 }
