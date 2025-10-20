@@ -88,6 +88,13 @@ const ITEM_FALLBACK_TIMEOUT_MS = Math.max(
   0,
 );
 
+const API_HEALTH_CHECK_TIMEOUT_MS = Math.max(
+  Number.parseInt(process.env.API_HEALTH_CHECK_TIMEOUT_MS || '2000', 10) || 0,
+  500,
+);
+const API_NON_JSON_CONTENT_PATTERNS = [/^\/api\/market\.csv$/];
+const API_CONTENT_TYPE_ALERT_TYPE = 'apiContentTypeMismatch';
+
 const DEFAULT_MARKET_CSV_FIELDS = [
   'id',
   'buy_price',
@@ -112,6 +119,7 @@ let redisClientPromise = null;
 let redisClient = null;
 const alertNotificationState = new Map();
 let dashboardRefreshPromise = null;
+let operationalAlertDispatcher = null;
 
 function normalizeLang(lang) {
   if (!lang) {
@@ -156,6 +164,68 @@ function getResponseContext(res) {
     return {};
   }
   return res[RESPONSE_CONTEXT_KEY] || {};
+}
+
+function isJsonContentType(value) {
+  if (!value && value !== '') {
+    return false;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return normalized.startsWith('application/json');
+}
+
+function shouldMonitorApiContentType(pathname) {
+  if (!pathname || typeof pathname !== 'string') {
+    return false;
+  }
+  if (!pathname.startsWith('/api/')) {
+    return false;
+  }
+  return !API_NON_JSON_CONTENT_PATTERNS.some((pattern) => pattern.test(pathname));
+}
+
+function safeParseRequestUrl(req) {
+  if (!req || typeof req.url !== 'string') {
+    return null;
+  }
+  try {
+    return new URL(req.url, 'http://localhost');
+  } catch (err) {
+    return null;
+  }
+}
+
+function withTimeout(promise, timeoutMs, timeoutMessage = 'timeout') {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !promise || typeof promise.then !== 'function') {
+    return promise;
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+    promise
+      .then((value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
 }
 
 function normalizeErrors(errors) {
@@ -685,6 +755,46 @@ async function getRedisClient() {
       console.warn(`[api] redis client error: ${err.message}`);
     }
     return null;
+  }
+}
+
+async function checkMongoHealth() {
+  const start = Date.now();
+  try {
+    const client = await withTimeout(
+      getMongoClient(),
+      API_HEALTH_CHECK_TIMEOUT_MS,
+      'mongo connect timeout',
+    );
+    if (!client || typeof client.db !== 'function') {
+      return { ok: false, error: 'mongo client unavailable', latencyMs: Date.now() - start };
+    }
+    await withTimeout(
+      client.db().command({ ping: 1 }),
+      API_HEALTH_CHECK_TIMEOUT_MS,
+      'mongo ping timeout',
+    );
+    return { ok: true, latencyMs: Date.now() - start };
+  } catch (err) {
+    return { ok: false, error: err.message, latencyMs: Date.now() - start };
+  }
+}
+
+async function checkRedisHealth() {
+  const start = Date.now();
+  try {
+    const client = await withTimeout(
+      getRedisClient(),
+      API_HEALTH_CHECK_TIMEOUT_MS,
+      'redis connect timeout',
+    );
+    if (!client || client.isOpen === false || typeof client.ping !== 'function') {
+      return { ok: false, error: 'redis client unavailable', latencyMs: Date.now() - start };
+    }
+    await withTimeout(client.ping(), API_HEALTH_CHECK_TIMEOUT_MS, 'redis ping timeout');
+    return { ok: true, latencyMs: Date.now() - start };
+  } catch (err) {
+    return { ok: false, error: err.message, latencyMs: Date.now() - start };
   }
 }
 
@@ -2273,6 +2383,20 @@ async function dispatchOperationalAlert(alert) {
   }
 }
 
+function getOperationalAlertDispatcher() {
+  return typeof operationalAlertDispatcher === 'function'
+    ? operationalAlertDispatcher
+    : dispatchOperationalAlert;
+}
+
+function setOperationalAlertDispatcher(fn) {
+  operationalAlertDispatcher = typeof fn === 'function' ? fn : dispatchOperationalAlert;
+}
+
+function resetOperationalAlertDispatcher() {
+  operationalAlertDispatcher = null;
+}
+
 function countFailuresSince(status, sinceDate) {
   if (!status || !Array.isArray(status.failures) || !sinceDate) {
     return 0;
@@ -3460,6 +3584,32 @@ async function handleAggregateBundleJson(req, res, url, lang) {
   });
 }
 
+async function handleHealthCheckRequest(req, res) {
+  const [mongoStatus, redisStatus] = await Promise.all([checkMongoHealth(), checkRedisHealth()]);
+  const healthy = mongoStatus.ok && redisStatus.ok;
+  const timestamp = new Date().toISOString();
+  const uptimeSeconds = typeof process.uptime === 'function' ? Math.round(process.uptime()) : null;
+  const data = {
+    status: healthy ? 'ok' : 'degraded',
+    checkedAt: timestamp,
+    uptimeSeconds,
+    components: {
+      mongo: mongoStatus,
+      redis: redisStatus,
+    },
+  };
+  ok(
+    res,
+    data,
+    {
+      source: 'health',
+      lang: DEFAULT_LANG,
+      stale: !healthy,
+    },
+    { statusCode: healthy ? 200 : 503 },
+  );
+}
+
 async function handleApiRequest(req, res) {
   const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET';
   const url = new URL(req.url, 'http://localhost');
@@ -3482,6 +3632,21 @@ async function handleApiRequest(req, res) {
       return;
     }
     await handleAdminDashboardRequest(req, res);
+    return;
+  }
+
+  if (pathname === '/api/healthz') {
+    if (method !== 'GET') {
+      fail(
+        res,
+        405,
+        'errorUnsupportedMethod',
+        'Method not allowed',
+        { source: 'health', stale: false, lang: DEFAULT_LANG },
+      );
+      return;
+    }
+    await handleHealthCheckRequest(req, res);
     return;
   }
 
@@ -3565,6 +3730,72 @@ async function handleApiRequest(req, res) {
   );
 }
 
+function attachContentTypeMonitor(req, res, method, pathname) {
+  if (!shouldMonitorApiContentType(pathname) || !res || typeof res.on !== 'function') {
+    return;
+  }
+  const effectivePathname = pathname || '<unknown>';
+  res.on('finish', () => {
+    let headerValue = null;
+    if (typeof res.getHeader === 'function') {
+      headerValue = res.getHeader('content-type');
+      if (headerValue == null) {
+        headerValue = res.getHeader('Content-Type');
+      }
+    } else if (res.headers && typeof res.headers === 'object') {
+      headerValue = res.headers['content-type'] ?? res.headers['Content-Type'] ?? null;
+    }
+
+    if (isJsonContentType(headerValue)) {
+      return;
+    }
+
+    const normalizedHeader = headerValue == null ? null : String(headerValue);
+    const context = getResponseContext(res) || {};
+    const traceId = context.traceId || null;
+    const statusCode = typeof res.statusCode === 'number' ? res.statusCode : null;
+    const message = `unexpected content-type ${normalizedHeader || '<missing>'} for ${method} ${effectivePathname} status ${
+      statusCode ?? 'unknown'
+    }`;
+
+    if (process.env.NODE_ENV !== 'test') {
+      const suffix = traceId ? ` trace=${traceId}` : '';
+      console.warn(`[api] ${message}${suffix}`);
+    }
+
+    const dispatcher = getOperationalAlertDispatcher();
+    if (typeof dispatcher === 'function') {
+      const alertPayload = {
+        type: API_CONTENT_TYPE_ALERT_TYPE,
+        message,
+        method,
+        route: effectivePathname,
+        statusCode,
+        contentType: normalizedHeader,
+      };
+      if (traceId) {
+        alertPayload.traceId = traceId;
+      }
+      alertPayload.timestamp = context.ts || new Date().toISOString();
+
+      try {
+        const maybePromise = dispatcher(alertPayload);
+        if (maybePromise && typeof maybePromise.catch === 'function') {
+          maybePromise.catch((err) => {
+            if (process.env.NODE_ENV !== 'test') {
+              console.warn(`[alert] content-type alert dispatch failed: ${err.message}`);
+            }
+          });
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(`[alert] content-type alert dispatch failed: ${err.message}`);
+        }
+      }
+    }
+  });
+}
+
 function requestListener(req, res) {
   const context = {
     traceId: generateTraceId(),
@@ -3572,6 +3803,14 @@ function requestListener(req, res) {
   };
   req[RESPONSE_CONTEXT_KEY] = context;
   res[RESPONSE_CONTEXT_KEY] = context;
+
+  const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET';
+  const parsedUrl = safeParseRequestUrl(req);
+  const pathname = parsedUrl ? parsedUrl.pathname : null;
+  context.method = method;
+  context.pathname = pathname;
+
+  attachContentTypeMonitor(req, res, method, pathname);
 
   handleApiRequest(req, res).catch((err) => {
     if (process.env.NODE_ENV !== 'test') {
@@ -3593,6 +3832,7 @@ module.exports.handleGetItem = handleGetItem;
 module.exports.handleGetAggregate = handleGetAggregate;
 module.exports.handleGetItemBundle = handleGetItemBundle;
 module.exports.handleAggregateBundleJson = handleAggregateBundleJson;
+module.exports.handleHealthCheckRequest = handleHealthCheckRequest;
 module.exports.normalizeLang = normalizeLang;
 module.exports.ok = ok;
 module.exports.fail = fail;
@@ -3676,6 +3916,9 @@ module.exports.__resetRedisClient = () => {
   redisClient = null;
   redisClientPromise = null;
 };
+
+module.exports.__setOperationalAlertDispatcher = setOperationalAlertDispatcher;
+module.exports.__resetOperationalAlertDispatcher = resetOperationalAlertDispatcher;
 
 module.exports.__getServerBinding = () => ({
   host: API_HOST,
