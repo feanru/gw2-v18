@@ -1,5 +1,6 @@
 const DEFAULT_CONFIG = {
   API_BASE_URL: '/api',
+  CDN_BASE_URL: '',
   DEFAULT_LANG: 'es',
   FALLBACK_LANGS: ['en'],
   MARKET_CSV_URL: 'https://api.datawars2.ie/gw2/v1/items/csv',
@@ -42,6 +43,9 @@ function applySource(target, source) {
 
   if (Object.prototype.hasOwnProperty.call(source, 'API_BASE_URL') && source.API_BASE_URL != null) {
     target.API_BASE_URL = source.API_BASE_URL;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'CDN_BASE_URL') && source.CDN_BASE_URL != null) {
+    target.CDN_BASE_URL = source.CDN_BASE_URL;
   }
   if (Object.prototype.hasOwnProperty.call(source, 'DEFAULT_LANG') && source.DEFAULT_LANG) {
     target.DEFAULT_LANG = source.DEFAULT_LANG;
@@ -198,6 +202,13 @@ export function getConfig() {
     : typeof base.FALLBACK_LANGS === 'string'
       ? base.FALLBACK_LANGS.split(',')
       : [];
+
+  if (base.CDN_BASE_URL != null && base.CDN_BASE_URL !== '') {
+    const normalizedCdn = String(base.CDN_BASE_URL).trim().replace(/\/$/, '');
+    base.CDN_BASE_URL = normalizedCdn;
+  } else {
+    base.CDN_BASE_URL = '';
+  }
   const normalizedDefaultLang = String(base.DEFAULT_LANG || DEFAULT_CONFIG.DEFAULT_LANG || '')
     .trim()
     .toLowerCase();
