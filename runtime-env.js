@@ -45,6 +45,20 @@
   const runtimeApiBaseUrl = normalizeUrl(runtime.API_BASE_URL);
   const API_BASE_URL = secureApiBaseUrl || runtimeApiBaseUrl || defaultApiBaseUrl;
 
+  const inferredCdnBaseUrl = (() => {
+    if (global && typeof global.location === 'object' && global.location && typeof global.location.origin === 'string') {
+      const origin = String(global.location.origin || '').trim();
+      if (origin) {
+        return origin.replace(/\/$/, '');
+      }
+    }
+    return null;
+  })();
+  const secureCdnBaseUrl = normalizeUrl(secureConfig && secureConfig.CDN_BASE_URL);
+  const runtimeCdnBaseUrl = normalizeUrl(runtime.CDN_BASE_URL);
+  const defaultCdnBaseUrl = normalizeUrl(inferredCdnBaseUrl);
+  const CDN_BASE_URL = secureCdnBaseUrl || runtimeCdnBaseUrl || defaultCdnBaseUrl || null;
+
   // Para añadir dependencias adicionales (Sentry, APM, CDN, etc.),
   // agrega sus dominios completos en esta lista o sobrescribe
   // `FETCH_GUARD_WHITELIST` desde el backend según sea necesario.
@@ -84,6 +98,9 @@
     }
     const merged = new Set(DEFAULT_FETCH_GUARD_WHITELIST);
     runtimeWhitelist.forEach((entry) => merged.add(entry));
+    if (CDN_BASE_URL) {
+      merged.add(CDN_BASE_URL);
+    }
     return Array.from(merged);
   };
 
@@ -108,7 +125,8 @@
       FETCH_GUARD_MODE,
       FETCH_GUARD_WHITELIST,
       FETCH_GUARD_REPORT_URL,
-      FEATURE_USE_PRECOMPUTED
+      FEATURE_USE_PRECOMPUTED,
+      CDN_BASE_URL
     }
   );
 })();
