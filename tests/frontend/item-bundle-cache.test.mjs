@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
-function createResponse({ status = 200, ok = true, body = {}, headers = {} } = {}) {
+function createResponse({ status = 200, ok = true, body = {}, headers = {}, json } = {}) {
+  const jsonFn = typeof json === 'function' ? json : async () => body;
   return {
     status,
     ok,
@@ -15,10 +16,10 @@ function createResponse({ status = 200, ok = true, body = {}, headers = {} } = {
       },
     },
     clone() {
-      return createResponse({ status, ok, body, headers });
+      return createResponse({ status, ok, body, headers, json });
     },
     async json() {
-      return body;
+      return jsonFn();
     },
   };
 }
@@ -73,6 +74,7 @@ function setupEnvironment({ featureFlag, fetchHandlers = [], serviceWorker = fal
       ? globalThis.navigator
       : undefined,
     alert: Object.prototype.hasOwnProperty.call(globalThis, 'alert') ? globalThis.alert : undefined,
+    console: Object.prototype.hasOwnProperty.call(globalThis, 'console') ? globalThis.console : undefined,
   };
 
   const events = [];
@@ -113,6 +115,26 @@ function setupEnvironment({ featureFlag, fetchHandlers = [], serviceWorker = fal
   const serviceWorkerStub = serviceWorker ? createServiceWorkerStub() : null;
   const navigatorStub = serviceWorkerStub ? { serviceWorker: serviceWorkerStub } : undefined;
 
+  const consoleEvents = {
+    log: [],
+    info: [],
+    warn: [],
+    error: [],
+    debug: [],
+  };
+  const originalConsole = previous.console;
+  const consoleStub = Object.create(originalConsole || {});
+  ['log', 'info', 'warn', 'error', 'debug'].forEach((method) => {
+    consoleStub[method] = (...args) => {
+      if (Array.isArray(consoleEvents[method])) {
+        consoleEvents[method].push(args);
+      }
+      if (originalConsole && typeof originalConsole[method] === 'function') {
+        originalConsole[method].apply(originalConsole, args);
+      }
+    };
+  });
+
   const windowStub = {
     dispatchEvent(evt) {
       events.push(evt);
@@ -149,7 +171,13 @@ function setupEnvironment({ featureFlag, fetchHandlers = [], serviceWorker = fal
       this.detail = init?.detail;
     }
   };
-  globalThis.fetch = async (url, options = {}) => {
+  globalThis.console = consoleStub;
+  globalThis.fetch = async (input, options = {}) => {
+    const url = typeof input === 'string'
+      ? input
+      : (input && typeof input === 'object' && 'url' in input)
+        ? input.url
+        : String(input);
     for (const handler of fetchHandlers) {
       if (handler.match(url, options)) {
         if (handler.error) throw handler.error;
@@ -170,6 +198,7 @@ function setupEnvironment({ featureFlag, fetchHandlers = [], serviceWorker = fal
   return {
     events,
     serviceWorker: serviceWorkerStub,
+    console: consoleEvents,
     triggerDOMContentLoaded() {
       const callbacks = domListeners.get('DOMContentLoaded') || [];
       callbacks.forEach((cb) => {
@@ -225,6 +254,11 @@ function setupEnvironment({ featureFlag, fetchHandlers = [], serviceWorker = fal
         delete globalThis.alert;
       } else {
         globalThis.alert = previous.alert;
+      }
+      if (previous.console === undefined) {
+        delete globalThis.console;
+      } else {
+        globalThis.console = previous.console;
       }
     },
   };
@@ -352,11 +386,85 @@ async function testFallbackCachesAndTelemetryWhenModernFails() {
     window.__bundleFallbacks__[0].ids.includes('90402'),
     'El evento de fallback debe incluir el ID solicitado',
   );
+  const fallbackWarningCount = env.console.warn.filter((entry) =>
+    typeof entry?.[0] === 'string'
+      && entry[0].includes('Fallo en bundle API, usando PHP como fallback')
+  ).length;
+  assert.ok(fallbackWarningCount >= 1, 'Debe registrar el aviso en consola al activar el fallback');
 
   const cachedBundles = await module.getItemBundles([90402]);
   assert.equal(apiRequests.length >= 1, true, 'Debe mantener el contador de llamadas iniciales');
   assert.equal(fallbackRequests.length, 1, 'No debe repetir el fallback con cache activo');
   assert.equal(cachedBundles[0]?.item?.name, 'Legacy Bundle 90402');
+
+  env.restore();
+}
+
+async function testRequestManagerWarningsAreCaptured() {
+  const env = setupEnvironment({
+    featureFlag: true,
+    fetchHandlers: [
+      {
+        match(url) {
+          return typeof url === 'string' && url.startsWith('/api/items?ids=111');
+        },
+        response() {
+          return createResponse({
+            body: '<html>error</html>',
+            headers: { 'content-type': 'text/html' },
+            json: async () => { throw new SyntaxError('Unexpected token < in JSON'); },
+          });
+        },
+      },
+      {
+        match(url) {
+          return typeof url === 'string' && url.startsWith('/api/items/111?lang=es');
+        },
+        response() {
+          return createResponse({
+            body: '<html>error</html>',
+            headers: { 'content-type': 'text/html' },
+            json: async () => { throw new SyntaxError('Unexpected token < in JSON'); },
+          });
+        },
+      },
+      {
+        match(url) {
+          return typeof url === 'string'
+            && url.startsWith('https://api.guildwars2.com/v2/items/111');
+        },
+        response() {
+          return createResponse({
+            body: {
+              data: {
+                item: { id: 111, name: 'Fallback Item 111', source: 'official-api' },
+              },
+              meta: { lang: 'es', fallback: 'official-api' },
+            },
+            headers: { 'content-type': 'application/json; charset=utf-8' },
+          });
+        },
+      },
+    ],
+  });
+
+  window.__bundleFallbacks__ = [];
+
+  const module = await import(`../../src/js/utils/requestManager.js?warnings=${Date.now()}`);
+  const items = await module.requestItems([111]);
+
+  assert.equal(window.__bundleFallbacks__.length, 0, 'RequestManager no debe tocar los contadores de bundle');
+  assert.equal(items[0]?.id, 111, 'El fallback oficial debe resolver el ítem');
+
+  const warningMessages = env.console.warn.map((entry) => entry?.[0] ?? '').join('\n');
+  assert.ok(
+    warningMessages.includes('[requestManager] official API fallback for item 111: unexpected content-type text/html'),
+    'Debe registrar el aviso del fallback oficial',
+  );
+
+  if (typeof module.abortRequests === 'function') {
+    module.abortRequests();
+  }
 
   env.restore();
 }
@@ -428,6 +536,7 @@ async function testServiceWorkerMetricsTelemetry() {
 async function run() {
   await testCachesUpdatedAfterModernBundleSuccess();
   await testFallbackCachesAndTelemetryWhenModernFails();
+  await testRequestManagerWarningsAreCaptured();
   await testFetchDedupCoalescesRequests();
   await testServiceWorkerMetricsTelemetry();
   console.log('tests/frontend/item-bundle-cache.test.mjs passed');
