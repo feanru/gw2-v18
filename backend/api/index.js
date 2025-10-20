@@ -166,6 +166,161 @@ function getResponseContext(res) {
   return res[RESPONSE_CONTEXT_KEY] || {};
 }
 
+function extractContentLength(headers) {
+  if (!headers) {
+    return null;
+  }
+  if (Array.isArray(headers)) {
+    for (const entry of headers) {
+      if (!entry) {
+        continue;
+      }
+      const [name, value] = entry;
+      if (typeof name === 'string' && name.toLowerCase() === 'content-length') {
+        const parsed = Number.parseInt(Array.isArray(value) ? value[0] : value, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          return parsed;
+        }
+      }
+    }
+    return null;
+  }
+  const lookup = (key) => {
+    if (Object.prototype.hasOwnProperty.call(headers, key)) {
+      return headers[key];
+    }
+    return null;
+  };
+  const candidate = lookup('Content-Length') ?? lookup('content-length');
+  if (candidate == null) {
+    return null;
+  }
+  const parsed = Number.parseInt(Array.isArray(candidate) ? candidate[0] : candidate, 10);
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    return parsed;
+  }
+  return null;
+}
+
+function attachResponseMetricsHooks(res) {
+  if (!res || typeof res !== 'object') {
+    return;
+  }
+  const context = getResponseContext(res);
+  if (!context || typeof context !== 'object') {
+    return;
+  }
+
+  context.hrStart = process.hrtime.bigint();
+  context.responseBytes = null;
+  context.ttfbMs = null;
+
+  const originalWriteHead = res.writeHead;
+  const originalEnd = res.end;
+  const originalWrite = typeof res.write === 'function' ? res.write : null;
+  const originalSetHeader = typeof res.setHeader === 'function' ? res.setHeader : null;
+
+  let headersSent = false;
+  let bytesLocked = false;
+
+  const recordFirstByte = () => {
+    if (context.firstByteHr) {
+      return;
+    }
+    const now = process.hrtime.bigint();
+    context.firstByteHr = now;
+    if (context.hrStart) {
+      const diff = now - context.hrStart;
+      if (diff >= 0) {
+        const ttfbMs = Number(diff) / 1e6;
+        if (Number.isFinite(ttfbMs) && ttfbMs >= 0) {
+          context.ttfbMs = ttfbMs;
+        }
+      }
+    }
+  };
+
+  const updateBytesFromChunk = (chunk, encoding) => {
+    if (bytesLocked || chunk == null) {
+      return;
+    }
+    let buffer;
+    if (Buffer.isBuffer(chunk)) {
+      buffer = chunk;
+    } else if (typeof chunk === 'string') {
+      buffer = Buffer.from(chunk, encoding);
+    } else {
+      buffer = Buffer.from(String(chunk));
+    }
+    const length = buffer.length;
+    if (!Number.isFinite(length) || length < 0) {
+      return;
+    }
+    if (!Number.isFinite(context.responseBytes) || context.responseBytes == null) {
+      context.responseBytes = 0;
+    }
+    context.responseBytes += length;
+  };
+
+  const captureLength = (headers) => {
+    if (bytesLocked) {
+      return;
+    }
+    const length = extractContentLength(headers);
+    if (length != null) {
+      context.responseBytes = length;
+      bytesLocked = true;
+    }
+  };
+
+  if (originalSetHeader) {
+    res.setHeader = function setHeaderPatched(name, value) {
+      if (typeof name === 'string' && name.toLowerCase() === 'content-length') {
+        const parsed = Number.parseInt(Array.isArray(value) ? value[0] : value, 10);
+        if (Number.isFinite(parsed) && parsed >= 0) {
+          context.responseBytes = parsed;
+          bytesLocked = true;
+        }
+      }
+      return originalSetHeader.apply(this, arguments);
+    };
+  }
+
+  res.writeHead = function writeHeadPatched(statusCode, headers = {}) {
+    if (!headersSent) {
+      headersSent = true;
+      recordFirstByte();
+      captureLength(headers);
+      context.responseStatus = Number.isFinite(statusCode) ? Number(statusCode) : context.responseStatus ?? null;
+      if (!bytesLocked && typeof res.getHeaders === 'function') {
+        captureLength(res.getHeaders());
+      }
+    }
+    return originalWriteHead.call(this, statusCode, headers);
+  };
+
+  if (originalWrite) {
+    res.write = function writePatched(chunk, encoding, cb) {
+      recordFirstByte();
+      updateBytesFromChunk(chunk, encoding);
+      return originalWrite.call(this, chunk, encoding, cb);
+    };
+  }
+
+  res.end = function endPatched(chunk, encoding, cb) {
+    if (!headersSent) {
+      captureLength(typeof res.getHeaders === 'function' ? res.getHeaders() : null);
+      recordFirstByte();
+      headersSent = true;
+      if (context.responseStatus == null && typeof res.statusCode === 'number') {
+        context.responseStatus = res.statusCode;
+      }
+    }
+    updateBytesFromChunk(chunk, encoding);
+    return originalEnd.call(this, chunk, encoding, cb);
+  };
+}
+
 function isJsonContentType(value) {
   if (!value && value !== '') {
     return false;
@@ -703,6 +858,16 @@ function setLegacyOverrides(overrides = {}) {
 
 function resetLegacyOverrides() {
   legacyRouter = createLegacyRouterInstance();
+  legacyBundleHandler = createLegacyBundleHandlerInstance();
+}
+
+function setLegacyBundleHandlerOverride(handler) {
+  if (typeof handler === 'function') {
+    legacyBundleHandler = handler;
+  }
+}
+
+function resetLegacyBundleHandlerOverride() {
   legacyBundleHandler = createLegacyBundleHandlerInstance();
 }
 
@@ -1854,6 +2019,17 @@ function computePercentile(sortedValues, percentile) {
   return sortedValues[safeIndex];
 }
 
+function computeAverage(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return null;
+  }
+  const sum = values.reduce((acc, value) => acc + value, 0);
+  if (!Number.isFinite(sum)) {
+    return null;
+  }
+  return sum / values.length;
+}
+
 async function recordAggregateMetric(metric) {
   try {
     const client = await getMongoClient();
@@ -1876,6 +2052,8 @@ async function recordAggregateMetric(metric) {
       cacheStoredAt: Number.isFinite(metric.cacheStoredAt)
         ? new Date(metric.cacheStoredAt)
         : null,
+      ttfbMs: Number.isFinite(metric.ttfbMs) ? Number(metric.ttfbMs) : null,
+      responseBytes: Number.isFinite(metric.responseBytes) ? Number(metric.responseBytes) : null,
       createdAt: new Date(),
     };
     await collection.insertOne(payload);
@@ -2530,7 +2708,16 @@ async function buildDashboardSnapshot() {
         endpoint: 'aggregate',
         createdAt: { $gte: metricsSince },
       },
-      { projection: { stale: 1, durationMs: 1, statusCode: 1, _id: 0 } },
+      {
+        projection: {
+          stale: 1,
+          durationMs: 1,
+          statusCode: 1,
+          ttfbMs: 1,
+          responseBytes: 1,
+          _id: 0,
+        },
+      },
     );
   const metrics = await metricsCursor.toArray();
   const totalResponses = metrics.length;
@@ -2539,8 +2726,22 @@ async function buildDashboardSnapshot() {
     .map((entry) => (entry && Number.isFinite(entry.durationMs) ? Number(entry.durationMs) : null))
     .filter((value) => value !== null)
     .sort((a, b) => a - b);
+  const ttfbValues = metrics
+    .map((entry) => (entry && Number.isFinite(entry.ttfbMs) ? Number(entry.ttfbMs) : null))
+    .filter((value) => value !== null)
+    .sort((a, b) => a - b);
+  const payloadSizes = metrics
+    .map((entry) => (entry && Number.isFinite(entry.responseBytes) ? Number(entry.responseBytes) : null))
+    .filter((value) => value !== null)
+    .sort((a, b) => a - b);
   const p95 = computePercentile(durations, 0.95);
   const p99 = computePercentile(durations, 0.99);
+  const ttfbP95 = computePercentile(ttfbValues, 0.95);
+  const ttfbP99 = computePercentile(ttfbValues, 0.99);
+  const payloadP95 = computePercentile(payloadSizes, 0.95);
+  const payloadP99 = computePercentile(payloadSizes, 0.99);
+  const ttfbAverage = computeAverage(ttfbValues);
+  const payloadAverage = computeAverage(payloadSizes);
 
   const statusRecords = await db
     .collection(SYNC_STATUS_COLLECTION)
@@ -2678,6 +2879,18 @@ async function buildDashboardSnapshot() {
       p95,
       p99,
       sampleCount: durations.length,
+    },
+    ttfb: {
+      average: ttfbAverage,
+      p95: ttfbP95,
+      p99: ttfbP99,
+      sampleCount: ttfbValues.length,
+    },
+    payload: {
+      averageBytes: payloadAverage,
+      p95Bytes: payloadP95,
+      p99Bytes: payloadP99,
+      sampleCount: payloadSizes.length,
     },
     ingestionFailures: {
       total24h: totalIngestionFailures,
@@ -3210,6 +3423,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
     }
   } finally {
     const elapsed = Number(process.hrtime.bigint() - start) / 1e6;
+    const responseContext = getResponseContext(res);
     recordAggregateMetric({
       statusCode,
       stale,
@@ -3225,6 +3439,12 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       lang: normalizeLang(lang),
       cacheAgeMs,
       cacheStoredAt,
+      ttfbMs: responseContext && Number.isFinite(responseContext.ttfbMs)
+        ? Number(responseContext.ttfbMs)
+        : null,
+      responseBytes: responseContext && Number.isFinite(responseContext.responseBytes)
+        ? Number(responseContext.responseBytes)
+        : null,
     });
   }
 }
@@ -3322,24 +3542,65 @@ async function handleGetItemBundle(req, res, url, lang) {
       buffer = Buffer.from(String(chunk));
     }
 
-    let finalBuffer = buffer;
-    try {
-      const payload = JSON.parse(buffer.toString('utf8') || '{}');
-      if (payload && typeof payload === 'object') {
-        const meta = { ...(payload.meta || {}) };
-        meta.source = 'fallback';
-        payload.meta = meta;
-        finalBuffer = Buffer.from(JSON.stringify(payload), 'utf8');
+    const text = buffer.toString('utf8');
+    let payload = null;
+    let parseError = null;
+    if (text.trim() !== '') {
+      try {
+        payload = JSON.parse(text);
+      } catch (err) {
+        parseError = err;
       }
-    } catch (err) {
-      finalBuffer = buffer;
     }
 
-    storedHeaders['Content-Length'] = Buffer.byteLength(finalBuffer);
+    if (!payload || typeof payload !== 'object') {
+      responseEnded = true;
+      res.writeHead = originalWriteHead;
+      res.end = originalEnd;
+      if (originalSetHeader) {
+        res.setHeader = originalSetHeader;
+      } else {
+        delete res.setHeader;
+      }
 
-    originalWriteHead.call(this, storedStatus ?? 200, storedHeaders);
+      const status = storedStatus && storedStatus >= 400 ? storedStatus : 502;
+      const errorList = [];
+      if (parseError) {
+        errorList.push({
+          code: 'fallback_invalid_json',
+          msg: parseError.message || 'Legacy bundle response was not valid JSON',
+        });
+      } else {
+        errorList.push({
+          code: 'fallback_empty_payload',
+          msg: 'Legacy bundle response was empty or invalid',
+        });
+      }
+
+      fail(
+        res,
+        status,
+        'aggregate_fallback_invalid',
+        'Legacy bundle response invalid',
+        { lang, source: 'fallback', stale: true },
+        errorList,
+      );
+      return;
+    }
+
+    const meta = { ...(payload.meta || {}) };
+    meta.source = 'fallback';
+    payload.meta = meta;
+
+    const finalBody = JSON.stringify(payload);
+    storedHeaders['Content-Type'] = 'application/json; charset=utf-8';
+    delete storedHeaders['content-type'];
+    storedHeaders['Content-Length'] = Buffer.byteLength(finalBody);
+
+    const statusCode = storedStatus ?? 200;
+    originalWriteHead.call(this, statusCode, storedHeaders);
     responseEnded = true;
-    return originalEnd.call(this, finalBuffer, undefined, cb);
+    return originalEnd.call(this, finalBody, undefined, cb);
   };
 
   try {
@@ -3804,6 +4065,8 @@ function requestListener(req, res) {
   req[RESPONSE_CONTEXT_KEY] = context;
   res[RESPONSE_CONTEXT_KEY] = context;
 
+  attachResponseMetricsHooks(res);
+
   const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET';
   const parsedUrl = safeParseRequestUrl(req);
   const pathname = parsedUrl ? parsedUrl.pathname : null;
@@ -3841,6 +4104,8 @@ module.exports.getDashboardSnapshotCached = getDashboardSnapshotCached;
 module.exports.invalidateDashboardSnapshotCache = invalidateDashboardSnapshotCache;
 module.exports.__setLegacyOverrides = setLegacyOverrides;
 module.exports.__resetLegacyOverrides = resetLegacyOverrides;
+module.exports.__setLegacyBundleHandler = setLegacyBundleHandlerOverride;
+module.exports.__resetLegacyBundleHandler = resetLegacyBundleHandlerOverride;
 
 module.exports.__setAggregateOverrides = (overrides = {}) => {
   if (overrides.buildItemAggregate) {
