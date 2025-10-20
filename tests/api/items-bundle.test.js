@@ -2,6 +2,10 @@ const assert = require('assert');
 
 process.env.NODE_ENV = 'test';
 
+const { registerMockDeps } = require('../helpers/register-mock-deps.js');
+
+const restoreDeps = registerMockDeps();
+
 const api = require('../../backend/api/index.js');
 
 function createMockResponse(context = {}) {
@@ -124,6 +128,13 @@ async function testMissingIdsReturns400() {
   assert.ok(Array.isArray(payload.errors));
   assert.strictEqual(payload.errors[0].code, 'ids_required');
   assert.strictEqual(payload.meta.source, 'aggregate');
+  const contentTypeMissingIds =
+    response.headers['Content-Type'] ?? response.headers['content-type'];
+  assert.strictEqual(
+    contentTypeMissingIds,
+    'application/json; charset=utf-8',
+    'responses without ids should return JSON content-type',
+  );
 }
 
 async function testSuccessfulBundleResponse() {
@@ -197,6 +208,12 @@ async function testSuccessfulBundleResponse() {
   const cacheControlHeader =
     response.headers['cache-control'] ?? response.headers['Cache-Control'];
   assert.strictEqual(cacheControlHeader, 'public, max-age=120, stale-while-revalidate=120');
+  const contentType = response.headers['Content-Type'] ?? response.headers['content-type'];
+  assert.strictEqual(
+    contentType,
+    'application/json; charset=utf-8',
+    'bundle responses should expose JSON content-type',
+  );
 }
 
 async function testBundleUnexpectedError() {
@@ -243,6 +260,12 @@ async function testBundleUnexpectedError() {
   assert.strictEqual(payload.errors[0].code, 'data_bundle_unexpected');
   assert.strictEqual(payload.meta.source, 'fallback');
   assert.strictEqual(payload.meta.stale, true);
+  const contentTypeError = response.headers['Content-Type'] ?? response.headers['content-type'];
+  assert.strictEqual(
+    contentTypeError,
+    'application/json; charset=utf-8',
+    'unexpected errors should preserve JSON content-type',
+  );
 }
 
 async function run() {
@@ -252,7 +275,13 @@ async function run() {
   console.log('tests/api/items-bundle.test.js passed');
 }
 
-run().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+run()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    if (typeof restoreDeps === 'function') {
+      restoreDeps();
+    }
+  });
