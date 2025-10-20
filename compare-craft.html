@@ -73,7 +73,7 @@
 
 
 
-  <script src="/dist/0.14.73/js/recipeService.standalone.min.js"></script>
+  <script src="/dist/0.14.75/js/recipeService.standalone.min.js"></script>
   <script>
     if (
       typeof window !== 'undefined' &&
@@ -83,9 +83,9 @@
     }
   </script>
   <script src="/runtime-env.js"></script>
-  <script type="module" src="/dist/0.14.73/js/services.min.js" defer></script>
+  <script type="module" src="/dist/0.14.75/js/services.min.js" defer></script>
 
-  <script type="module" src="/dist/0.14.73/js/bundle-utils-1.min.js" defer></script>
+  <script type="module" src="/dist/0.14.75/js/bundle-utils-1.min.js" defer></script>
 
   <!-- Modal del Buscador fuera de .container para igualar a index.html -->
   <div id="search-modal" class="search-modal hidden">
@@ -112,7 +112,7 @@
     const closeBtn = document.getElementById('close-search-modal');
     openBtn.addEventListener('click', function(e) {
       e.preventDefault();
-      openSearchModal('/dist/0.14.73/js/search-modal-compare-craft.min.js');
+      openSearchModal('/dist/0.14.75/js/search-modal-compare-craft.min.js');
     });
     closeBtn.addEventListener('click', closeSearchModal);
     modal.querySelector('.search-modal-backdrop').addEventListener('click', closeSearchModal);
@@ -122,12 +122,12 @@
   });
   </script>
 
-  <script type="module" src="/dist/0.14.73/js/tabs.min.js" defer></script>
-  <script type="module" src="/dist/0.14.73/js/feedback-modal.min.js" defer></script>
+  <script type="module" src="/dist/0.14.75/js/tabs.min.js" defer></script>
+  <script type="module" src="/dist/0.14.75/js/feedback-modal.min.js" defer></script>
   <!-- Nuevos módulos separados -->
-  <script type="module" src="/dist/0.14.73/js/items-core.min.js" defer></script>
-  <script type="module" src="/dist/0.14.73/js/ui-helpers.min.js" defer></script>
-  <script type="module" src="/dist/0.14.73/js/compare-ui.min.js" defer></script>
+  <script type="module" src="/dist/0.14.75/js/items-core.min.js" defer></script>
+  <script type="module" src="/dist/0.14.75/js/ui-helpers.min.js" defer></script>
+  <script type="module" src="/dist/0.14.75/js/compare-ui.min.js" defer></script>
 
   <script>
   // Override global de selectItem para integración con el modal en compare-craft
@@ -156,7 +156,7 @@
 };
 
   </script>
-<script type="module" src="/dist/0.14.73/js/bundle-auth-nav.min.js" defer></script>
+<script type="module" src="/dist/0.14.75/js/bundle-auth-nav.min.js" defer></script>
 <script>
   // Inicializar autenticación cuando el DOM esté listo
   document.addEventListener('DOMContentLoaded', function() {
@@ -166,9 +166,9 @@
   });
 </script>
 
-<script type="module" src="/dist/0.14.73/js/storageUtils.min.js" defer></script>
+<script type="module" src="/dist/0.14.75/js/storageUtils.min.js" defer></script>
 <!-- Manejadores de comparativa (guardar comparativa) -->
-<script type="module" src="/dist/0.14.73/js/compareHandlers.min.js" defer></script>
+<script type="module" src="/dist/0.14.75/js/compareHandlers.min.js" defer></script>
 <script>
   document.addEventListener('DOMContentLoaded', function () {
     if (window.comparativa &&
@@ -177,6 +177,6 @@
     }
   });
 </script>
-  <script type="module" src="/dist/0.14.73/js/sw-register.min.js"></script>
+  <script type="module" src="/dist/0.14.75/js/sw-register.min.js"></script>
 </body>
 </html>
