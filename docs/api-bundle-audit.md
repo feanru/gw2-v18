@@ -42,3 +42,12 @@
 4. **Mientras se corrige la causa raíz, monitorizar `window.__bundleFallbacks__` y las alertas de `requestManager` para cuantificar el impacto.** Estos contadores ya se rellenan cuando el fallback se activa y permiten detectar si el problema persiste tras un despliegue.【F:src/js/services/recipeService.js†L15-L37】【F:src/js/utils/requestManager.js†L338-L352】
 
 Una vez restablecida la entrega de JSON desde `/api`, los módulos dejarán de activar el modo de respaldo y los avisos desaparecerán automáticamente.
+
+## Reporte de implementación
+
+| Fecha | Cambio | Cobertura | Evidencia |
+| --- | --- | --- | --- |
+| 2025-10-20 | Se añadió el helper `__getServerBinding` y la prueba `tests/api/server-binding.test.js` para confirmar que el listener de Node permanece en el puerto 3300 (o el configurado por entorno). | Paso 1 del plan de remediación: verificación de la salud del servicio y del puerto expuesto. | `tests/api/server-binding.test.js`, commit `Add server binding coverage and reusable backend mocks`. |
+| 2025-10-20 | Se ampliaron las pruebas de `/api/items/bundle` para asegurar que todas las respuestas —éxito, validación y errores inesperados— devuelven `Content-Type: application/json; charset=utf-8`. | Paso 3 del plan: garantizar que las cabeceras JSON no se pierdan tras cambios en el proxy o en el backend. | `tests/api/items-bundle.test.js`, commit `Add server binding coverage and reusable backend mocks`. |
+| 2025-10-20 | Se extendió `tests/legacy-api.test.mjs` para validar que los bloques `location /api/` y `location /backend/api/` de `nginx.conf` mantengan `proxy_pass http://127.0.0.1:3300`. | Paso 2 del plan: supervisar la configuración del proxy inverso y detectar desvíos hacia HTML. | `tests/legacy-api.test.mjs`, commit `Add server binding coverage and reusable backend mocks`. |
+| 2025-10-20 | Se incorporó `tests/helpers/register-mock-deps.js` para registrar stubs de MongoDB y Redis en los suites de API. | Soporte transversal: reproducibilidad de pruebas y diagnósticos sin depender de infraestructura externa. | `tests/helpers/register-mock-deps.js`, commit `Add server binding coverage and reusable backend mocks`. |
