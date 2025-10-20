@@ -89,10 +89,6 @@ async function run() {
     assert.strictEqual(snapshot.jsErrors.perMinute, 8);
     assert.strictEqual(snapshot.jsErrors.lastMessage, 'ReferenceError: boom');
 
-    assert.ok(snapshot.delivery, 'delivery section should exist');
-    assert.strictEqual(snapshot.delivery.ttfb.sampleCount, 0);
-    assert.strictEqual(snapshot.delivery.payload.sampleCount, 0);
-
     const freshnessAge = snapshot.freshness.items.lastUpdatedAgeMinutes;
     assert.ok(freshnessAge >= 89, 'items freshness should be older than 89 minutes');
 

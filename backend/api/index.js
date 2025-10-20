@@ -400,7 +400,6 @@ function writeNotModified(res, headers = {}) {
     ...headers,
     'Cache-Control': 'no-store, no-cache, must-revalidate',
   };
-  trackResponseMetrics(res, 0);
   res.writeHead(304, finalHeaders);
   res.end();
 }
@@ -513,32 +512,6 @@ function buildMeta(metaOverrides = {}, context = {}) {
   return meta;
 }
 
-function trackResponseMetrics(res, byteLength = 0) {
-  const context = getResponseContext(res);
-  if (!context || typeof context !== 'object') {
-    return;
-  }
-  if (!context.__responseMetrics) {
-    context.__responseMetrics = {
-      firstByteAt: null,
-      responseSizeBytes: 0,
-    };
-  }
-  const metrics = context.__responseMetrics;
-  if (metrics.firstByteAt == null) {
-    try {
-      metrics.firstByteAt = process.hrtime.bigint();
-    } catch (err) {
-      metrics.firstByteAt = null;
-    }
-  }
-  if (Number.isFinite(byteLength) && byteLength > 0) {
-    metrics.responseSizeBytes = (metrics.responseSizeBytes || 0) + byteLength;
-  } else if (!Number.isFinite(metrics.responseSizeBytes)) {
-    metrics.responseSizeBytes = 0;
-  }
-}
-
 function writeResponse(
   res,
   statusCode,
@@ -562,14 +535,12 @@ function writeResponse(
     payload.errors = normalizedErrors;
   }
   const body = JSON.stringify(payload);
-  const bodyLength = Buffer.byteLength(body);
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store, no-cache, must-revalidate',
     ...additionalHeaders,
   };
-  headers['Content-Length'] = bodyLength;
-  trackResponseMetrics(res, bodyLength);
+  headers['Content-Length'] = Buffer.byteLength(body);
   res.writeHead(statusCode, headers);
   res.end(body);
 }
@@ -1773,17 +1744,6 @@ function computePercentile(sortedValues, percentile) {
   return sortedValues[safeIndex];
 }
 
-function computeAverage(values) {
-  if (!Array.isArray(values) || values.length === 0) {
-    return null;
-  }
-  const total = values.reduce((acc, value) => acc + value, 0);
-  if (!Number.isFinite(total)) {
-    return null;
-  }
-  return total / values.length;
-}
-
 async function recordAggregateMetric(metric) {
   try {
     const client = await getMongoClient();
@@ -1793,10 +1753,6 @@ async function recordAggregateMetric(metric) {
       statusCode: Number.isFinite(metric.statusCode) ? Number(metric.statusCode) : null,
       stale: Boolean(metric.stale),
       durationMs: Number.isFinite(metric.durationMs) ? Number(metric.durationMs) : null,
-      ttfbMs: Number.isFinite(metric.ttfbMs) ? Number(metric.ttfbMs) : null,
-      responseSizeBytes: Number.isFinite(metric.responseSizeBytes)
-        ? Number(metric.responseSizeBytes)
-        : null,
       source: metric.source || null,
       cacheHit: typeof metric.cacheHit === 'boolean' ? metric.cacheHit : null,
       cacheMiss: typeof metric.cacheMiss === 'boolean' ? metric.cacheMiss : null,
@@ -2450,16 +2406,7 @@ async function buildDashboardSnapshot() {
         endpoint: 'aggregate',
         createdAt: { $gte: metricsSince },
       },
-      {
-        projection: {
-          stale: 1,
-          durationMs: 1,
-          statusCode: 1,
-          ttfbMs: 1,
-          responseSizeBytes: 1,
-          _id: 0,
-        },
-      },
+      { projection: { stale: 1, durationMs: 1, statusCode: 1, _id: 0 } },
     );
   const metrics = await metricsCursor.toArray();
   const totalResponses = metrics.length;
@@ -2470,16 +2417,6 @@ async function buildDashboardSnapshot() {
     .sort((a, b) => a - b);
   const p95 = computePercentile(durations, 0.95);
   const p99 = computePercentile(durations, 0.99);
-  const ttfbValues = metrics
-    .map((entry) => (entry && Number.isFinite(entry.ttfbMs) ? Number(entry.ttfbMs) : null))
-    .filter((value) => value !== null)
-    .sort((a, b) => a - b);
-  const payloadSizes = metrics
-    .map((entry) =>
-      entry && Number.isFinite(entry.responseSizeBytes) ? Number(entry.responseSizeBytes) : null,
-    )
-    .filter((value) => value !== null)
-    .sort((a, b) => a - b);
 
   const statusRecords = await db
     .collection(SYNC_STATUS_COLLECTION)
@@ -2617,20 +2554,6 @@ async function buildDashboardSnapshot() {
       p95,
       p99,
       sampleCount: durations.length,
-    },
-    delivery: {
-      ttfb: {
-        average: computeAverage(ttfbValues),
-        p95: computePercentile(ttfbValues, 0.95),
-        p99: computePercentile(ttfbValues, 0.99),
-        sampleCount: ttfbValues.length,
-      },
-      payload: {
-        averageBytes: computeAverage(payloadSizes),
-        p95Bytes: computePercentile(payloadSizes, 0.95),
-        p99Bytes: computePercentile(payloadSizes, 0.99),
-        sampleCount: payloadSizes.length,
-      },
     },
     ingestionFailures: {
       total24h: totalIngestionFailures,
@@ -2978,59 +2901,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
   let snapshotTtlMs = null;
   let cacheAgeMs = null;
   let cacheStoredAt = null;
-  let firstByteAt = null;
-  let responseSizeBytes = 0;
   const fields = aggregateHelpers.parseAggregateFields(url?.searchParams?.get('fields'));
-
-  const originalWriteHead = res.writeHead.bind(res);
-  const originalWrite = res.write.bind(res);
-  const originalEnd = res.end.bind(res);
-
-  const markFirstByte = () => {
-    if (firstByteAt === null) {
-      firstByteAt = process.hrtime.bigint();
-    }
-  };
-
-  const addChunkSize = (chunk, encoding) => {
-    if (!chunk) {
-      return;
-    }
-    if (Buffer.isBuffer(chunk)) {
-      responseSizeBytes += chunk.length;
-      return;
-    }
-    if (typeof chunk === 'string') {
-      const enc = typeof encoding === 'string' ? encoding : undefined;
-      responseSizeBytes += Buffer.byteLength(chunk, enc);
-      return;
-    }
-    try {
-      const buffer = Buffer.from(chunk);
-      responseSizeBytes += buffer.length;
-    } catch (err) {
-      // ignore non-bufferable chunks
-    }
-  };
-
-  res.writeHead = function patchedWriteHead(...args) {
-    markFirstByte();
-    return originalWriteHead(...args);
-  };
-
-  res.write = function patchedWrite(chunk, encoding, cb) {
-    markFirstByte();
-    addChunkSize(chunk, encoding);
-    return originalWrite(chunk, encoding, cb);
-  };
-
-  res.end = function patchedEnd(chunk, encoding, cb) {
-    if (chunk) {
-      addChunkSize(chunk, encoding);
-    }
-    markFirstByte();
-    return originalEnd(chunk, encoding, cb);
-  };
   try {
     const cacheLookupStart = process.hrtime.bigint();
     cached = await getCachedAggregateFn(itemId, lang);
@@ -3215,20 +3086,10 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
     }
   } finally {
     const elapsed = Number(process.hrtime.bigint() - start) / 1e6;
-    const ttfbMs =
-      firstByteAt != null ? Number(firstByteAt - start) / 1e6 : null;
-    res.writeHead = originalWriteHead;
-    res.write = originalWrite;
-    res.end = originalEnd;
     recordAggregateMetric({
       statusCode,
       stale,
       durationMs: Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : null,
-      ttfbMs: Number.isFinite(ttfbMs) && ttfbMs >= 0 ? ttfbMs : null,
-      responseSizeBytes:
-        Number.isFinite(responseSizeBytes) && responseSizeBytes >= 0
-          ? responseSizeBytes
-          : null,
       source,
       cacheHit,
       cacheMiss: !cacheHit,

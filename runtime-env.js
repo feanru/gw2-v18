@@ -55,23 +55,6 @@
   const runtimeWhitelist = normalizeList(runtime.FETCH_GUARD_WHITELIST);
   const secureWhitelist = normalizeList(secureConfig && secureConfig.FETCH_GUARD_WHITELIST);
 
-  const normalizeUrl = (value) => {
-    if (typeof value !== 'string') {
-      return null;
-    }
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    try {
-      const url = new URL(trimmed, global.location?.origin || undefined);
-      const normalized = url.toString().replace(/\/$/, '');
-      return normalized;
-    } catch (err) {
-      return trimmed.replace(/\/$/, '');
-    }
-  };
-
   const buildWhitelist = () => {
     if (secureWhitelist.length > 0) {
       return Array.from(new Set(secureWhitelist));
@@ -87,10 +70,6 @@
   // Deja este campo vacío si no se necesita registrar incidencias.
   const FETCH_GUARD_REPORT_URL = null;
 
-  const runtimeCdnBaseUrl = normalizeUrl(runtime.CDN_BASE_URL);
-  const secureCdnBaseUrl = normalizeUrl(secureConfig && secureConfig.CDN_BASE_URL);
-  const CDN_BASE_URL = secureCdnBaseUrl || runtimeCdnBaseUrl || null;
-
   const FEATURE_USE_PRECOMPUTED = Object.prototype.hasOwnProperty.call(runtime, 'FEATURE_USE_PRECOMPUTED')
     ? runtime.FEATURE_USE_PRECOMPUTED
     : false; // El backend puede elevar esta flag sin volver a desplegar el bundle.
@@ -105,7 +84,6 @@
       FETCH_GUARD_MODE,
       FETCH_GUARD_WHITELIST,
       FETCH_GUARD_REPORT_URL,
-      CDN_BASE_URL,
       FEATURE_USE_PRECOMPUTED
     }
   );
