@@ -30,7 +30,17 @@
     return trimmed ? trimmed.replace(/\/$/, '') : null;
   };
 
-  const defaultApiBaseUrl = 'https://gw2item.com/api';
+  const fallbackApiBaseUrl = '/api';
+  const inferredApiBaseUrl = (() => {
+    if (global && typeof global.location === 'object' && global.location && typeof global.location.origin === 'string') {
+      const origin = String(global.location.origin || '').trim();
+      if (origin) {
+        return `${origin.replace(/\/$/, '')}${fallbackApiBaseUrl}`;
+      }
+    }
+    return fallbackApiBaseUrl;
+  })();
+  const defaultApiBaseUrl = normalizeUrl(inferredApiBaseUrl) || fallbackApiBaseUrl;
   const secureApiBaseUrl = normalizeUrl(secureConfig && secureConfig.API_BASE_URL);
   const runtimeApiBaseUrl = normalizeUrl(runtime.API_BASE_URL);
   const API_BASE_URL = secureApiBaseUrl || runtimeApiBaseUrl || defaultApiBaseUrl;
