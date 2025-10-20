@@ -22,6 +22,29 @@
     : null;
   const FETCH_GUARD_MODE = secureGuardMode || runtimeGuardMode || defaultGuardMode;
 
+  const normalizeUrl = (value) => {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed.replace(/\/$/, '') : null;
+  };
+
+  const fallbackApiBaseUrl = '/api';
+  const inferredApiBaseUrl = (() => {
+    if (global && typeof global.location === 'object' && global.location && typeof global.location.origin === 'string') {
+      const origin = String(global.location.origin || '').trim();
+      if (origin) {
+        return `${origin.replace(/\/$/, '')}${fallbackApiBaseUrl}`;
+      }
+    }
+    return fallbackApiBaseUrl;
+  })();
+  const defaultApiBaseUrl = normalizeUrl(inferredApiBaseUrl) || fallbackApiBaseUrl;
+  const secureApiBaseUrl = normalizeUrl(secureConfig && secureConfig.API_BASE_URL);
+  const runtimeApiBaseUrl = normalizeUrl(runtime.API_BASE_URL);
+  const API_BASE_URL = secureApiBaseUrl || runtimeApiBaseUrl || defaultApiBaseUrl;
+
   // Para añadir dependencias adicionales (Sentry, APM, CDN, etc.),
   // agrega sus dominios completos en esta lista o sobrescribe
   // `FETCH_GUARD_WHITELIST` desde el backend según sea necesario.
@@ -81,6 +104,7 @@
     global.__RUNTIME_CONFIG__ || {},
     runtime,
     {
+      API_BASE_URL,
       FETCH_GUARD_MODE,
       FETCH_GUARD_WHITELIST,
       FETCH_GUARD_REPORT_URL,
