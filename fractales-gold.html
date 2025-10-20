@@ -259,25 +259,31 @@
             parent.appendChild(messageEl);
           });
 
-          return;
+          return null;
         }
 
         await ui.renderTablaResumenOroIndividual('tabla-resumen-oro-individual', preciosFractales, resumenData);
-        ui.renderGraficoContribuciones(resumenData.contribuciones);
         ui.renderTablaReferenciasProfit('tabla-referencias-profit', preciosFractales, resumenData);
-        ui.renderGraficoAbrirVsVender('abrir-vs-vender-chart', preciosFractales, resumenData);
         ui.renderExtras(preciosFractales, 24.96);
+        return { preciosFractales, resumenData };
       }
 
       setLoadingState(true);
+      let renderResult = null;
       try {
-        await renderTodo();
+        renderResult = await renderTodo();
       } catch (error) {
         console.error('renderTodo: error inesperado', error);
         const fallbackMessage = 'No se pudo cargar la información de fractales. Intenta nuevamente más tarde.';
         window.StorageUtils?.showToast?.(fallbackMessage, 'error');
       } finally {
         setLoadingState(false);
+      }
+
+      if (renderResult) {
+        const { preciosFractales, resumenData } = renderResult;
+        ui.renderGraficoContribuciones(resumenData.contribuciones);
+        ui.renderGraficoAbrirVsVender('abrir-vs-vender-chart', preciosFractales, resumenData);
       }
     });
   </script>
