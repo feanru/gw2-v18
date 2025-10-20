@@ -3,6 +3,11 @@ import http from 'http';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { registerMockDeps } = require('./helpers/register-mock-deps.js');
+const restoreDeps = registerMockDeps();
 
 const { getItemIconPlaceholderPath } = await import('../src/js/utils/iconPlaceholder.js');
 const PLACEHOLDER_ICON_PATH = getItemIconPlaceholderPath();
@@ -315,6 +320,9 @@ try {
 } finally {
   await new Promise((resolve) => server.close(resolve));
   __resetLegacyOverrides();
+  if (typeof restoreDeps === 'function') {
+    restoreDeps();
+  }
 }
 
 console.log('tests/legacy-api.test.mjs passed');
