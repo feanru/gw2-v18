@@ -1,0 +1,44 @@
+# Auditoría de respuestas HTML en las APIs de bundles
+
+## Resumen ejecutivo
+- Las vistas que consumen los agregados de ítems están recibiendo respuestas con `Content-Type: text/html`, por lo que los clientes descartan el payload y activan sus modos de respaldo (PHP o API oficial de Guild Wars 2).
+- En todos los flujos analizados, el frontend comprueba explícitamente que la cabecera `Content-Type` incluya `application/json` antes de procesar la respuesta; cuando la cabecera no coincide, se genera el error observado y se registra un aviso para habilitar el fallback.【F:src/js/services/recipeService.js†L89-L131】【F:src/js/item-loader.js†L301-L356】【F:src/js/utils/requestManager.js†L272-L352】
+- El backend Node y los controladores PHP siempre emiten JSON bien formado y fijan `Content-Type: application/json; charset=utf-8`. Si llega HTML al navegador, proviene de una capa previa (proxy, balanceador o CDN) que devuelve páginas de error o realiza un fallback SPA al `index.html`.【F:backend/api/index.js†L3147-L3256】【F:backend/api/response.php†L124-L220】【F:tests/php-api-json-responses.test.mjs†L77-L156】【F:nginx.conf†L87-L125】
+- La causa raíz más probable es una desconfiguración del *base URL* o un incidente en el proxy: cuando `/api/...` no se resuelve contra el servicio Node, Nginx atiende la solicitud con la regla `location /` y responde `index.html` (HTML), o bien entrega una página de error 50x con `Content-Type: text/html`. Esto explica tanto los fallos de los agregados modernos como la activación del fallback PHP en el cliente.【F:nginx.conf†L108-L120】
+
+## Inventario de vistas afectadas
+| Página | Bundle / Script principal | Dependencia de datos | Impacto cuando llega HTML |
+| --- | --- | --- | --- |
+| `dones.html` | `/dist/0.14.71/js/bundle-legendary.min.js` + `dones.min.js` | `bundle-legendary` usa `GuildWars2API` (API oficial v2) y, en la UI de dones, se apoya en `RecipeService` para precargar bundles.【F:dones.html†L116-L137】【F:src/js/bundle-legendary.js†L8-L107】 | El modal/árbol de dones no obtiene datos y los cálculos quedan vacíos; se registran errores de parsing y el usuario ve placeholders sin completar. |
+| `leg-craft.html` | `bundle-legendary` + `services.min.js` | `services.min.js` expone `RecipeService.getItemBundles`, que alimenta los cálculos de costes legendarios.【F:leg-craft.html†L159-L186】【F:src/js/services/recipeService.js†L73-L137】 | La página entra en modo degradado y depende del fallback PHP; los costes pueden quedarse desactualizados. |
+| `bag-craft.html` | `bundle-bags.min.js` | `bundle-bags` importa `getItemBundles` y `getItemDetails` del mismo `RecipeService`, por lo que sufre el mismo error de contenido HTML.【F:bag-craft.html†L95-L111】【F:src/js/bundle-bags.js†L1-L58】 | Los árboles de ingredientes y el cálculo de precios no se renderizan; se muestran mensajes de error y los precios quedan a cero. |
+| `item.html` | `item-loader.min.js` | `item-loader` consulta `/api/items/{id}` y `/api/items/bundle`; si el JSON falla, recurre a PHP y muestra banners de error.【F:item.html†L130-L170】【F:src/js/item-loader.js†L301-L410】 | La ficha del ítem muestra errores al cargar datos, las métricas de mercado quedan vacías y se dispara el modo legado. |
+| `index.html`, `item.html`, `compare-craft.html` | `search-modal*.min.js` | El buscador importa `requestManager`, que agrega IDs vía `/api/items?ids=...`; una respuesta HTML activa el fallback hacia la API oficial y deja iconos y rarezas en blanco.【F:index.html†L127-L149】【F:src/js/search-modal-core.js†L5-L86】【F:src/js/utils/requestManager.js†L250-L360】 | El modal de búsqueda pierde iconos/rareza y hace más llamadas a la API oficial, aumentando la latencia. |
+
+## Análisis de las respuestas anómalas
+
+### 1. Bundles agregados (`/api/items/bundle` y `/backend/api/dataBundle.php`)
+- **Expectativa del cliente.** `RecipeService.getItemBundles` arma lotes de hasta 35 IDs y valida que la respuesta principal tenga `response.ok === true` y `Content-Type` JSON antes de intentar parsear. Si algo falla, registra `"Fallo en bundle API, usando PHP como fallback"` y consulta la ruta PHP histórica.【F:src/js/services/recipeService.js†L93-L129】
+- **Comportamiento del backend.** `handleGetItemBundle` (Node) construye el agregado con datos de caché; si todo va bien envía JSON con cabeceras explícitas. Cuando el agregado falla, llama al `legacyBundleHandler`, que a su vez utiliza los controladores PHP pero conserva el `Content-Type` en JSON.【F:backend/api/index.js†L3108-L3256】
+- **Controladores PHP.** Tanto `dataBundle.php` como el resto de endpoints se apoyan en `json_ok/json_fail`, que fuerzan `application/json` incluso en errores. Los tests automatizados validan que nunca aparezca `<html>` ni se omitan las cabeceras.【F:backend/api/response.php†L124-L220】【F:tests/php-api-json-responses.test.mjs†L77-L156】
+- **Causa probable del HTML.** Si la petición no llega al Node interno (por ejemplo, `proxy_pass` sin backend, caída del servicio o URL base incorrecta), Nginx sirve `index.html` por la regla `location /` o una página 50x, ambas con `Content-Type: text/html`. El cliente interpreta esa respuesta como inválida y activa el fallback PHP, que sí devuelve JSON.【F:nginx.conf†L108-L120】
+
+### 2. Detalle de ítems (`/api/items/{id}`)
+- **Cliente moderno.** `item-loader` primero intenta `/api/items/{id}?lang=...`. Antes de procesar el cuerpo, revisa la cabecera y lanza `"Respuesta no válida: text/html"` si la respuesta no es JSON. De inmediato activa la ruta PHP `/backend/api/itemDetails.php` y registra telemetría del fallo.【F:src/js/item-loader.js†L304-L410】
+- **Fallback PHP.** Igual que en los bundles, `itemDetails.php` solo emite JSON y los tests lo comprueban. Por eso, cuando el usuario ve la ficha cargarse con datos parciales, provienen del fallback, confirmando que la respuesta HTML se originó antes de llegar a PHP.【F:backend/api/response.php†L124-L220】【F:tests/php-api-json-responses.test.mjs†L77-L156】
+- **Configuración.** El valor por defecto de `API_BASE_URL` es `/api`, y se puede sobrescribir en `runtime-env.js` o en la configuración segura. Si se despliega la app detrás de otro dominio sin ajustar esta variable, el frontend seguirá consultando `/api`, que en el proxy puede resolverse a HTML en lugar del servicio Node.【F:src/js/config.js†L1-L51】【F:runtime-env.js†L3-L61】
+
+### 3. Cargas masivas e iconos (`requestManager` y buscadores)
+- **Batching.** `requestManager` arma lotes hasta de 200 IDs contra `${API_BASE_URL}/items?ids=...`. Igual que los otros módulos, verifica `Content-Type` y, si detecta algo distinto, registra `"unexpected content-type text/html"` y lanza un fallback contra la API oficial. Este mecanismo es el que produce los avisos repetidos en consola.【F:src/js/utils/requestManager.js†L278-L352】
+- **Impacto visible.** El buscador (`search-modal-core`) y otros componentes que dependen de `requestItems` dejan de mostrar iconos y raridades cuando la API moderna falla, porque el fallback devuelve únicamente los datos oficiales y no la metadata enriquecida del agregado interno.【F:src/js/search-modal-core.js†L5-L86】
+
+### 4. `bundle-legendary` y consultas directas a la API oficial
+- Aunque el módulo no usa el backend interno, también espera JSON (`response.json()`) de la API de ArenaNet; cuando recibe HTML (p. ej. por una página de mantenimiento) lanza excepciones que terminan propagándose como errores de bundle. El patrón coincide con los otros módulos: cualquier respuesta no-JSON rompe el flujo.【F:src/js/bundle-legendary.js†L24-L107】
+
+## Conclusiones y próximos pasos
+1. **Verificar la salud del servicio Node en el puerto 3300 (o el que corresponda) y del proxy que expone `/api`.** Si el proceso está caído o la ruta apunta a otro backend, Nginx servirá HTML y reproducirá el fallo descrito.【F:nginx.conf†L100-L120】
+2. **Comprobar el valor efectivo de `API_BASE_URL` en `runtime-env.js` y en cualquier variable de entorno.** Un valor vacío, relativo o apuntando a un host diferente provocará que el frontend consulte rutas que devuelven HTML (SPA fallback).【F:src/js/config.js†L1-L51】【F:runtime-env.js†L3-L61】
+3. **Revisar los logs del proxy/CDN para confirmar qué código y cuerpo se devolvieron.** Si se observan respuestas 50x con HTML, ajustar las páginas de error para que devuelvan JSON o, idealmente, restaurar la API moderna.
+4. **Mientras se corrige la causa raíz, monitorizar `window.__bundleFallbacks__` y las alertas de `requestManager` para cuantificar el impacto.** Estos contadores ya se rellenan cuando el fallback se activa y permiten detectar si el problema persiste tras un despliegue.【F:src/js/services/recipeService.js†L15-L37】【F:src/js/utils/requestManager.js†L338-L352】
+
+Una vez restablecida la entrega de JSON desde `/api`, los módulos dejarán de activar el modo de respaldo y los avisos desaparecerán automáticamente.
