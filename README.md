@@ -50,6 +50,13 @@ Ambos valores aceptan números enteros en megabytes. Cuando no se indican, el wo
 
 Los archivos HTML referencian recursos almacenados en directorios versionados (`/dist/<versión>/js/`) y pueden servirse con encabezados de caché agresivos (por ejemplo `Cache-Control: public, max-age=31536000, immutable`). Tras cada despliegue, invalida las cachés de la CDN o de Cloudflare para que los HTML apunten al nuevo directorio generado.
 
+### Checklist de verificación previa al release
+
+1. **Probar `/api/items/bundle`.** Ejecuta `curl -i https://<host>/api/items/bundle?ids=19721,19722` (sustituye `<host>` por el dominio del entorno). Asegúrate de que responde con HTTP `200` y que las cabeceras incluyen `Content-Type: application/json; charset=utf-8` y `X-Data-Source`. Si la respuesta devuelve un `400`, confirma que el cuerpo sigue siendo JSON válido con un `meta.traceId` poblado.
+2. **Confirmar cabeceras en caché y API.** Repite la llamada anterior con `-H 'Accept-Language: en'` y valida que el proxy mantiene `Cache-Control` y `Content-Type` sin degradar a `text/html`. Esto previene que el fallback SPA se active en producción.
+3. **Supervisar `window.__bundleFallbacks__`.** Con la aplicación cargada en el navegador (entorno de pruebas), abre la consola y ejecuta `window.__bundleFallbacks__`. Tras un despliegue limpio el arreglo debe estar vacío o contener únicamente entradas antiguas; si aparecen IDs nuevos significa que el frontend tuvo que recurrir al PHP.
+4. **Vigilar avisos de `requestManager`.** En la misma sesión de DevTools, filtra los logs por `[requestManager]`. Cualquier mensaje nuevo sobre `unexpected content-type` o `official API fallback` indica que la API moderna está devolviendo HTML o errores y debe corregirse antes de cerrar el release.
+
 ### Política de caché
 
 - Los bundles y workers alojados bajo rutas versionadas (`/dist/<versión>/js/`) se sirven con `Cache-Control: public, max-age=31536000, immutable` a través de `nginx.conf`. Al cambiar la versión se genera un nuevo directorio, por lo que las rutas antiguas pueden permanecer en caché indefinidamente.
