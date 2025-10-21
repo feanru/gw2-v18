@@ -89,24 +89,40 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
   }
 
-  const ensureDonesPagesReady = async (timeoutMs = 2000) => {
-    if (window.DonesPages) return;
+  const DEFAULT_READY_TIMEOUT = 2000;
+  const READY_POLL_INTERVAL = 50;
+  let ensureReadyPromise = null;
 
-    await new Promise((resolve, reject) => {
+  const ensureDonesPagesReady = async (timeoutMs = DEFAULT_READY_TIMEOUT) => {
+    if (window.DonesPages) return;
+    if (ensureReadyPromise) {
+      return ensureReadyPromise;
+    }
+
+    ensureReadyPromise = new Promise((resolve, reject) => {
       const start = Date.now();
-      const check = () => {
+      const poll = () => {
         if (window.DonesPages) {
           resolve();
           return;
         }
+
         if (Date.now() - start >= timeoutMs) {
-          reject(new Error('DonesPages not ready'));
+          const error = new Error('DonesPages not ready');
+          error.timeoutMs = timeoutMs;
+          reject(error);
           return;
         }
-        setTimeout(check, 50);
+
+        setTimeout(poll, READY_POLL_INTERVAL);
       };
-      check();
+
+      poll();
+    }).finally(() => {
+      ensureReadyPromise = null;
     });
+
+    return ensureReadyPromise;
   };
 
   const TAB_LOADERS = {
