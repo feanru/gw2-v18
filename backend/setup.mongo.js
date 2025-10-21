@@ -133,9 +133,19 @@ async function ensureIndexes() {
       {
         name: 'aggregateSnapshots_item_lang_snapshotAt',
         partialFilterExpression: { snapshotAt: { $exists: true } },
-        expireAfterSeconds: aggregateSnapshotTtlSeconds,
       },
     );
+    if (aggregateSnapshotTtlSeconds != null) {
+      await ensureNamedIndex(
+        aggregateSnapshots,
+        { snapshotAt: -1 },
+        {
+          name: 'aggregateSnapshots_snapshotAt_ttl',
+          partialFilterExpression: { snapshotAt: { $exists: true } },
+          expireAfterSeconds: aggregateSnapshotTtlSeconds,
+        },
+      );
+    }
 
     const operationalEvents = db.collection(operationalEventCollectionName);
     const operationalEventTtlSeconds = normalizeTtlSeconds(
@@ -148,9 +158,19 @@ async function ensureIndexes() {
       {
         name: 'operationalEvents_type_timestamp',
         partialFilterExpression: { timestamp: { $exists: true } },
-        expireAfterSeconds: operationalEventTtlSeconds,
       },
     );
+    if (operationalEventTtlSeconds != null) {
+      await ensureNamedIndex(
+        operationalEvents,
+        { timestamp: -1 },
+        {
+          name: 'operationalEvents_timestamp_ttl',
+          partialFilterExpression: { timestamp: { $exists: true } },
+          expireAfterSeconds: operationalEventTtlSeconds,
+        },
+      );
+    }
 
     const metricsArchive = db.collection('apiMetricsArchive');
     await metricsArchive.createIndex({ day: 1 }, { unique: true });
