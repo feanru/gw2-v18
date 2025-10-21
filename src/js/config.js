@@ -36,6 +36,95 @@ function toBoolean(value, defaultValue = false) {
   return defaultValue;
 }
 
+function detectDebugMode({ legacy, runtime, secureRuntime, globalScope }) {
+  const candidates = [
+    secureRuntime && (secureRuntime.DEBUG_RUNTIME ?? secureRuntime.DEBUG),
+    runtime && (runtime.DEBUG_RUNTIME ?? runtime.DEBUG),
+    legacy && (legacy.DEBUG_RUNTIME ?? legacy.DEBUG),
+    globalScope && (globalScope.__RUNTIME_DEBUG__ ?? globalScope.__DEBUG__),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate !== undefined) {
+      return toBoolean(candidate, false);
+    }
+  }
+
+  if (globalScope && globalScope.location && typeof globalScope.location.search === 'string') {
+    const search = String(globalScope.location.search || '');
+    if (search) {
+      try {
+        const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+        const keys = ['debugRuntime', 'runtimeDebug', 'debug-config'];
+        for (const key of keys) {
+          if (params.has(key)) {
+            const value = params.get(key);
+            return toBoolean(value == null ? true : value, true);
+          }
+        }
+      } catch (error) {
+        if (/[?&](debugRuntime|runtimeDebug|debug-config)(?:=|&|$)/i.test(search)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function emitRuntimeDebugLog({ debugMode, legacy, runtime, secureRuntime }) {
+  if (!debugMode || typeof console === 'undefined' || console === null) {
+    return;
+  }
+
+  const now = new Date();
+  const payload = {
+    legacyConfig: Boolean(legacy),
+    runtimeConfig: Boolean(runtime),
+    secureRuntimeConfig: Boolean(secureRuntime),
+    runtimeLoadedAt: runtime && Object.prototype.hasOwnProperty.call(runtime, '__loadedAt')
+      ? runtime.__loadedAt
+      : null,
+    configInitializedAt: now.toISOString(),
+  };
+
+  if (!runtime) {
+    console.warn('[runtime-config][debug] runtime-env.js was not available during config initialization.', payload);
+    return;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(runtime, '__loadedAt')) {
+    console.warn('[runtime-config][debug] runtime-env.js missing "__loadedAt" marker; verify load order.', payload);
+    return;
+  }
+
+  const parsedRuntime = typeof runtime.__loadedAt === 'string'
+    ? Date.parse(runtime.__loadedAt)
+    : Number.isFinite(runtime.__loadedAt)
+      ? Number(runtime.__loadedAt)
+      : Number.NaN;
+
+  if (Number.isNaN(parsedRuntime)) {
+    console.warn('[runtime-config][debug] runtime-env.js has an invalid "__loadedAt" timestamp.', payload);
+    return;
+  }
+
+  const deltaMs = now.getTime() - parsedRuntime;
+  payload.runtimeLoadedDeltaMs = deltaMs;
+
+  if (deltaMs < -50) {
+    console.warn('[runtime-config][debug] runtime-env.js appears to have executed after config.js. Ensure /runtime-env.js loads first.', payload);
+    return;
+  }
+
+  console.info('[runtime-config][debug] runtime configuration applied successfully.', {
+    ...payload,
+    lang: runtime.LANG,
+    flags: runtime.FLAGS,
+  });
+}
+
 function applySource(target, source) {
   if (!source || typeof source !== 'object') {
     return;
@@ -172,6 +261,7 @@ export function getConfig() {
   const secureRuntime = globalScope && typeof globalScope.__SECURE_RUNTIME_CONFIG__ === 'object'
     ? globalScope.__SECURE_RUNTIME_CONFIG__
     : null;
+  const debugMode = detectDebugMode({ legacy, runtime, secureRuntime, globalScope });
 
   applySource(base, legacy);
   applySource(base, runtime);
@@ -218,6 +308,8 @@ export function getConfig() {
   base.LANG = base.DEFAULT_LANG || DEFAULT_CONFIG.DEFAULT_LANG;
   const normalizedActiveLang = String(base.LANG || '').trim().toLowerCase();
   base.FALLBACK_LANGS = base.FALLBACK_LANGS.filter((lang) => lang && lang !== normalizedActiveLang);
+
+  emitRuntimeDebugLog({ debugMode, legacy, runtime, secureRuntime });
 
   return base;
 }

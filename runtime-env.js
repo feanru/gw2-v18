@@ -30,6 +30,104 @@
     return trimmed ? trimmed.replace(/\/$/, '') : null;
   };
 
+  const normalizeLang = (value) => {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed || null;
+  };
+
+  const parseFlagEntries = (value) => {
+    const result = {};
+    const assign = (key, raw) => {
+      if (key == null) {
+        return;
+      }
+      const name = String(key).trim();
+      if (!name) {
+        return;
+      }
+
+      if (raw === undefined) {
+        result[name] = true;
+        return;
+      }
+
+      if (typeof raw === 'boolean' || raw === null) {
+        result[name] = raw;
+        return;
+      }
+
+      if (typeof raw === 'number') {
+        if (!Number.isNaN(raw)) {
+          result[name] = raw;
+        }
+        return;
+      }
+
+      if (typeof raw === 'string') {
+        const normalized = raw.trim();
+        if (!normalized) {
+          result[name] = true;
+          return;
+        }
+        const lowered = normalized.toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(lowered)) {
+          result[name] = true;
+          return;
+        }
+        if (['0', 'false', 'no', 'off'].includes(lowered)) {
+          result[name] = false;
+          return;
+        }
+        result[name] = normalized;
+        return;
+      }
+
+      if (typeof raw === 'object') {
+        result[name] = raw;
+        return;
+      }
+    };
+
+    const visit = (entry) => {
+      if (entry == null) {
+        return;
+      }
+
+      if (Array.isArray(entry)) {
+        entry.forEach(visit);
+        return;
+      }
+
+      if (typeof entry === 'object') {
+        for (const [flagName, flagValue] of Object.entries(entry)) {
+          assign(flagName, flagValue);
+        }
+        return;
+      }
+
+      if (typeof entry === 'string') {
+        const parts = entry.split(',');
+        for (const part of parts) {
+          const segment = part.trim();
+          if (!segment) {
+            continue;
+          }
+          const [flagName, flagValue] = segment.split('=');
+          assign(flagName, flagValue === undefined ? true : flagValue);
+        }
+        return;
+      }
+
+      assign(entry, true);
+    };
+
+    visit(value);
+    return result;
+  };
+
   const fallbackApiBaseUrl = '/api';
   const inferredApiBaseUrl = (() => {
     if (global && typeof global.location === 'object' && global.location && typeof global.location.origin === 'string') {
@@ -44,6 +142,42 @@
   const secureApiBaseUrl = normalizeUrl(secureConfig && secureConfig.API_BASE_URL);
   const runtimeApiBaseUrl = normalizeUrl(runtime.API_BASE_URL);
   const API_BASE_URL = secureApiBaseUrl || runtimeApiBaseUrl || defaultApiBaseUrl;
+
+  const resolveLang = () => {
+    const secureLang = normalizeLang(
+      secureConfig && (secureConfig.LANG || secureConfig.DEFAULT_LANG),
+    );
+    if (secureLang) {
+      return secureLang;
+    }
+
+    const runtimeLang = normalizeLang(runtime.LANG) || normalizeLang(runtime.DEFAULT_LANG);
+    if (runtimeLang) {
+      return runtimeLang;
+    }
+
+    if (global && global.document && global.document.documentElement) {
+      const docLang = normalizeLang(global.document.documentElement.lang);
+      if (docLang) {
+        return docLang;
+      }
+    }
+
+    if (global && global.navigator && typeof global.navigator.language === 'string') {
+      const navigatorLang = normalizeLang(global.navigator.language);
+      if (navigatorLang) {
+        return navigatorLang;
+      }
+    }
+
+    return 'es';
+  };
+
+  const LANG = resolveLang();
+
+  const runtimeFlags = parseFlagEntries(runtime.FLAGS);
+  const secureFlags = parseFlagEntries(secureConfig && secureConfig.FLAGS);
+  const FLAGS = Object.assign({}, runtimeFlags, secureFlags);
 
   const inferredCdnBaseUrl = (() => {
     if (global && typeof global.location === 'object' && global.location && typeof global.location.origin === 'string') {
@@ -122,6 +256,8 @@
     runtime,
     {
       API_BASE_URL,
+      LANG,
+      FLAGS,
       FETCH_GUARD_MODE,
       FETCH_GUARD_WHITELIST,
       FETCH_GUARD_REPORT_URL,
