@@ -83,7 +83,7 @@ function ensureRuntimeScript(content) {
 
   let sanitizedContent = content.replace(scriptLineRegex, '');
 
-  const moduleRegex = /<script\s+type="module"/i;
+  const moduleRegex = /<script\b[^>]*\btype=["']module["']/i;
   const workerRegex = /<script\b[^>]*\bsrc=["'][^"']*(?:worker|sw-register)[^"']*["'][^>]*>/i;
   const moduleMatch = moduleRegex.exec(sanitizedContent);
   const workerMatch = workerRegex.exec(sanitizedContent);
