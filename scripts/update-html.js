@@ -84,16 +84,22 @@ function ensureRuntimeScript(content) {
   let sanitizedContent = content.replace(scriptLineRegex, '');
 
   const moduleRegex = /<script\s+type="module"/i;
+  const workerRegex = /<script\b[^>]*\bsrc=["'][^"']*(?:worker|sw-register)[^"']*["'][^>]*>/i;
   const moduleMatch = moduleRegex.exec(sanitizedContent);
+  const workerMatch = workerRegex.exec(sanitizedContent);
 
-  if (!moduleMatch) {
+  const anchorMatch = [moduleMatch, workerMatch]
+    .filter(Boolean)
+    .sort((a, b) => a.index - b.index)[0];
+
+  if (!anchorMatch) {
     return sanitizedContent;
   }
 
-  const moduleIndex = moduleMatch.index;
-  const lineStart = sanitizedContent.lastIndexOf('\n', moduleIndex - 1) + 1;
+  const anchorIndex = anchorMatch.index;
+  const lineStart = sanitizedContent.lastIndexOf('\n', anchorIndex - 1) + 1;
   const indentMatch = sanitizedContent
-    .slice(lineStart, moduleIndex)
+    .slice(lineStart, anchorIndex)
     .match(/^\s*/);
   const indent = indentMatch ? indentMatch[0] : '';
   const insertion = `${indent}${scriptTag}\n`;
