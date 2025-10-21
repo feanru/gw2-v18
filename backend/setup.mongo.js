@@ -7,12 +7,14 @@ const aggregateSnapshotRetentionDays = Number.parseInt(
   process.env.AGGREGATE_SNAPSHOT_RETENTION_DAYS || '90',
   10,
 );
+const aggregateSnapshotTtlDaysOverride = process.env.AGGREGATE_SNAPSHOT_TTL_DAYS;
 const operationalEventCollectionName =
   process.env.OPERATIONAL_EVENT_COLLECTION || 'operationalEvents';
 const operationalEventRetentionDays = Number.parseInt(
   process.env.OPERATIONAL_EVENT_RETENTION_DAYS || '30',
   10,
 );
+const operationalEventTtlDaysOverride = process.env.OPERATIONAL_EVENT_TTL_DAYS;
 
 function normalizeTtlSeconds(days, fallbackDays) {
   const parsed = Number.isFinite(days) ? days : Number(fallbackDays);
@@ -64,6 +66,17 @@ async function ensureNamedIndex(collection, spec, options = {}) {
   }
 
   await collection.createIndex(spec, normalizedOptions);
+}
+
+function resolveTtlDays(preferredDays, fallbackDays) {
+  if (preferredDays == null || preferredDays === '') {
+    return fallbackDays;
+  }
+  const parsed = Number(preferredDays);
+  if (!Number.isFinite(parsed)) {
+    return fallbackDays;
+  }
+  return parsed;
 }
 
 async function ensureIndexes() {
@@ -124,7 +137,10 @@ async function ensureIndexes() {
       },
     );
     const aggregateSnapshotTtlSeconds = normalizeTtlSeconds(
-      aggregateSnapshotRetentionDays,
+      resolveTtlDays(
+        aggregateSnapshotTtlDaysOverride,
+        aggregateSnapshotRetentionDays,
+      ),
       90,
     );
     await ensureNamedIndex(
@@ -139,7 +155,7 @@ async function ensureIndexes() {
 
     const operationalEvents = db.collection(operationalEventCollectionName);
     const operationalEventTtlSeconds = normalizeTtlSeconds(
-      operationalEventRetentionDays,
+      resolveTtlDays(operationalEventTtlDaysOverride, operationalEventRetentionDays),
       30,
     );
     await ensureNamedIndex(

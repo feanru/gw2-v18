@@ -38,11 +38,11 @@ Este proyecto utiliza una base de datos MongoDB para almacenar colecciones de **
 ### aggregateSnapshots
 
 - `{ itemId: 1, lang: 1 }` (índice único para reutilizar snapshots por idioma).
-- `{ itemId: 1, lang: 1, snapshotAt: -1 }` con `partialFilterExpression` (`snapshotAt` existente) y TTL configurable mediante `AGGREGATE_SNAPSHOT_RETENTION_DAYS` (en días, por defecto **90**).
+- `{ itemId: 1, lang: 1, snapshotAt: -1 }` con `partialFilterExpression` (`snapshotAt` existente) y TTL configurable mediante `AGGREGATE_SNAPSHOT_RETENTION_DAYS` o `AGGREGATE_SNAPSHOT_TTL_DAYS` (en días, por defecto **90**).
 
 ### operationalEvents
 
-- `{ type: 1, timestamp: -1 }` con `partialFilterExpression` y TTL ajustable con `OPERATIONAL_EVENT_RETENTION_DAYS` (por defecto **30** días). Permite consultar rápidamente alertas y eventos operativos recientes.
+- `{ type: 1, timestamp: -1 }` con `partialFilterExpression` y TTL ajustable con `OPERATIONAL_EVENT_RETENTION_DAYS` o `OPERATIONAL_EVENT_TTL_DAYS` (por defecto **30** días). Permite consultar rápidamente alertas y eventos operativos recientes.
 
 ### Migración
 
