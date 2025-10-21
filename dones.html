@@ -114,12 +114,12 @@
   </div>
 
   <script src="/runtime-env.js"></script>
-  <script type="module" src="/dist/0.14.81/js/bundle-utils-1.min.js" defer></script>
-  <script type="module" src="/dist/0.14.81/js/bundle-dones.min.js" defer></script>
+  <script type="module" src="/dist/0.14.83/js/bundle-utils-1.min.js" defer></script>
+  <script type="module" src="/dist/0.14.83/js/bundle-dones.min.js" defer></script>
   <!-- Consulta dist/manifest.json para obtener el hash actual; se regenera en cada compilación -->
-  <script type="module" src="/dist/0.14.81/js/bundle-legendary.min.js" defer></script>
-  <script type="module" src="/dist/0.14.81/js/dones.min.js" defer></script>
-  <script type="module" src="/dist/0.14.81/js/bundle-auth-nav.min.js" defer></script>
+  <script type="module" src="/dist/0.14.83/js/bundle-legendary.min.js" defer></script>
+  <script type="module" src="/dist/0.14.83/js/dones.min.js" defer></script>
+  <script type="module" src="/dist/0.14.83/js/bundle-auth-nav.min.js" defer></script>
   <script>
     // Inicializar autenticación cuando el DOM esté listo
     document.addEventListener('DOMContentLoaded', function() {
@@ -132,8 +132,8 @@
   <script type="module">
     window.addEventListener('DOMContentLoaded', async () => {
       try {
-        await import('/dist/0.14.81/js/feedback-modal.min.js');
-        await import('/dist/0.14.81/js/sw-register.min.js');
+        await import('/dist/0.14.83/js/feedback-modal.min.js');
+        await import('/dist/0.14.83/js/sw-register.min.js');
       } catch (e) {
         console.error('Error loading optional modules', e);
       }
