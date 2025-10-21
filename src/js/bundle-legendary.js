@@ -15,7 +15,7 @@ class GuildWars2API {
     
     // Configuración de caché
     this.CACHE_PREFIX = 'gw2_api_cache_';
-    this.CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 horas en milisegundos
+    this.CACHE_DURATION = 10 * 60 * 1000; // 10 minutos en milisegundos
   }
 
   /**

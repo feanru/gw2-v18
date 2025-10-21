@@ -140,7 +140,7 @@ const isLegendaryGiftLike = (name) => {
 let cachedNonMarketMap = null;
 let legendaryDataProcessed = false;
 
-const ITEM_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
+const ITEM_CACHE_TTL = 10 * 60 * 1000; // 10 minutos
 const PRELOAD_REFRESH_TTL = 6 * 60 * 60 * 1000; // 6 horas
 
 const sharedPreloadState = {
