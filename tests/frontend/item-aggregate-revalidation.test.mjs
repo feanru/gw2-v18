@@ -78,11 +78,14 @@ async function testAggregateRevalidation304() {
     assert.equal(first.status, 200);
     assert.equal(first.fromCache, false);
     assert.equal(first.data.item.id, 1001);
+    assert.equal(first.model.item.id, 1001);
+    assert.equal(first.model.prices.unit.buy, 100);
 
     const second = await fetchItemAggregate(1001);
     assert.equal(second.status, 304, 'La segunda llamada debe devolver 304');
     assert.equal(second.fromCache, true, 'La segunda llamada debe salir del cache');
     assert.equal(second.data.item.id, 1001, 'Debe reutilizar los datos cacheados');
+    assert.equal(second.model.item.id, 1001, 'El modelo debe provenir del cache');
     assert.equal(callCount, 2, 'Debe realizar exactamente dos solicitudes');
   });
 

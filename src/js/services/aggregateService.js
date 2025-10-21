@@ -1,5 +1,6 @@
 import fetchWithRetry from '../utils/fetchWithRetry.js';
 import { normalizeApiResponse } from '../utils/apiResponse.js';
+import { toUiModel as toAggregateUiModel } from '../adapters/aggregateAdapter.js';
 
 const STORAGE_PREFIX = 'aggregate:item:';
 const memorySession = new Map();
@@ -133,9 +134,11 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
         data: cached.data,
         meta: cached.meta,
       });
+      const model = toAggregateUiModel({ data: cached.data, meta: cached.meta });
       return {
         data: cached.data,
         meta: cached.meta,
+        model,
         status: 304,
         fromCache: true,
       };
@@ -149,8 +152,9 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
   }
   const raw = await response.json().catch(() => null);
   const { data, meta } = normalizeApiResponse(raw);
+  const model = toAggregateUiModel({ data, meta });
   writeCache(id, { etag, lastModified, data, meta });
-  return { data, meta, status: response.status, fromCache: false };
+  return { data, meta, model, status: response.status, fromCache: false };
 }
 
 export function __clearAggregateItemCacheForTests() {

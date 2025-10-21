@@ -7,7 +7,10 @@ import { getPrice, preloadPrices } from './utils/priceHelper.js';
 import { normalizeApiResponse } from './utils/apiResponse.js';
 import { isFeatureEnabled } from './utils/featureFlags.js';
 import { fetchItemAggregate } from './services/aggregateService.js';
-import { toUiModel } from './adapters/aggregateAdapter.js';
+import {
+  toUiModel as toAggregateUiModel,
+  toPriceSummary,
+} from './adapters/aggregateAdapter.js';
 import { renderFreshnessBanner, hideFreshnessBanner } from './utils/freshnessBanner.js';
 import './services/recipeService.js';
 import { runCostsWorkerTask } from './workers/costsWorkerClient.js';
@@ -729,8 +732,9 @@ if (typeof window !== 'undefined') {
       }
       try {
         if (typeof runtimeWindow.showSkeleton === 'function') runtimeWindow.showSkeleton(skeleton);
-        const raw = await fetchItemAggregate(id);
-        const { item, market, tree, meta } = toUiModel(raw);
+        const response = await fetchItemAggregate(id);
+        const model = response?.model || toAggregateUiModel({ data: response?.data, meta: response?.meta });
+        const { item, market, tree, meta, prices } = model || {};
         if (!item) {
           if (typeof runtimeWindow.hideSkeleton === 'function') runtimeWindow.hideSkeleton(skeleton);
           runtimeWindow.showError?.('No se encontraron datos precomputados para este ítem.');
@@ -739,6 +743,7 @@ if (typeof window !== 'undefined') {
           return;
         }
 
+        const priceSummary = prices?.hasData ? prices : toPriceSummary(market);
         let rootIngredient = tree ? hydrateAggregateNodeForComparativa(tree, null) : null;
         if (!rootIngredient) {
           rootIngredient = new CraftIngredient({
@@ -747,33 +752,38 @@ if (typeof window !== 'undefined') {
             icon: item.icon,
             rarity: item.rarity,
             count: 1,
-            buy_price: Number(market?.unitBuyPrice || 0),
-            sell_price: Number(market?.unitSellPrice || 0),
+            buy_price: Number(priceSummary?.unit?.buy ?? market?.unitBuyPrice ?? 0),
+            sell_price: Number(priceSummary?.unit?.sell ?? market?.unitSellPrice ?? 0),
             is_craftable: false,
             recipe: null,
             children: [],
           });
-          rootIngredient.total_buy = Number(market?.buy || 0);
-          rootIngredient.total_sell = Number(market?.sell || 0);
-          rootIngredient.total_crafted = Number(market?.crafted || 0);
+          rootIngredient.total_buy = Number(priceSummary?.totals?.buy ?? market?.buy ?? 0);
+          rootIngredient.total_sell = Number(priceSummary?.totals?.sell ?? market?.sell ?? 0);
+          rootIngredient.total_crafted = Number(priceSummary?.totals?.crafted ?? market?.crafted ?? 0);
         }
-        if (market) {
-          if (Number.isFinite(Number(market.buy))) {
-            rootIngredient.total_buy = Number(market.buy);
-          }
-          if (Number.isFinite(Number(market.sell))) {
-            rootIngredient.total_sell = Number(market.sell);
-          }
-          if (Number.isFinite(Number(market.crafted))) {
-            rootIngredient.total_crafted = Number(market.crafted);
-          }
+        const totals = priceSummary?.totals || {};
+        if (Number.isFinite(Number(totals.buy))) {
+          rootIngredient.total_buy = Number(totals.buy);
+        } else if (market && Number.isFinite(Number(market.buy))) {
+          rootIngredient.total_buy = Number(market.buy);
+        }
+        if (Number.isFinite(Number(totals.sell))) {
+          rootIngredient.total_sell = Number(totals.sell);
+        } else if (market && Number.isFinite(Number(market.sell))) {
+          rootIngredient.total_sell = Number(market.sell);
+        }
+        if (Number.isFinite(Number(totals.crafted))) {
+          rootIngredient.total_crafted = Number(totals.crafted);
+        } else if (market && Number.isFinite(Number(market.crafted))) {
+          rootIngredient.total_crafted = Number(market.crafted);
         }
 
         runtimeWindow._mainRecipeOutputCount = rootIngredient?.recipe?.output_item_count
           || rootIngredient?.output
           || 1;
-        runtimeWindow._mainBuyPrice = market?.unitBuyPrice ?? rootIngredient.buy_price ?? 0;
-        runtimeWindow._mainSellPrice = market?.unitSellPrice ?? rootIngredient.sell_price ?? 0;
+        runtimeWindow._mainBuyPrice = priceSummary?.unit?.buy ?? market?.unitBuyPrice ?? rootIngredient.buy_price ?? 0;
+        runtimeWindow._mainSellPrice = priceSummary?.unit?.sell ?? market?.unitSellPrice ?? rootIngredient.sell_price ?? 0;
 
         runtimeWindow.ingredientObjs.push(rootIngredient);
         comparativaMetaById.set(Number(rootIngredient.id), meta);
