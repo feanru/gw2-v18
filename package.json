@@ -11,7 +11,8 @@
     "check-assets": "node scripts/check-assets.js",
     "bump:cache": "bash scripts/bump-cache-version.sh",
     "purge:cdn": "node scripts/purge-cdn.js",
-    "lint:domains": "node scripts/check-allowed-domains.mjs"
+    "lint:domains": "node scripts/check-allowed-domains.mjs",
+    "check-runtime": "node tests/runtime-order.test.mjs"
   },
   "dependencies": {
     "mongodb": "^6.5.0",

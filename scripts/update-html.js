@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const manifestPath = path.join(__dirname, '..', 'dist', 'manifest.json');
 if (!fs.existsSync(manifestPath)) {
@@ -16,6 +17,9 @@ if (!nextVersion) {
 }
 
 const rootDir = path.join(__dirname, '..');
+const runtimeEnvPath = path.join(rootDir, 'runtime-env.js');
+validateRuntimeEnv(runtimeEnvPath);
+
 const htmlFiles = fs.readdirSync(rootDir).filter((f) => f.endsWith('.html'));
 
 for (const file of htmlFiles) {
@@ -80,16 +84,22 @@ function ensureRuntimeScript(content) {
   let sanitizedContent = content.replace(scriptLineRegex, '');
 
   const moduleRegex = /<script\s+type="module"/i;
+  const workerRegex = /<script\b[^>]*\bsrc=["'][^"']*(?:worker|sw-register)[^"']*["'][^>]*>/i;
   const moduleMatch = moduleRegex.exec(sanitizedContent);
+  const workerMatch = workerRegex.exec(sanitizedContent);
 
-  if (!moduleMatch) {
+  const anchorMatch = [moduleMatch, workerMatch]
+    .filter(Boolean)
+    .sort((a, b) => a.index - b.index)[0];
+
+  if (!anchorMatch) {
     return sanitizedContent;
   }
 
-  const moduleIndex = moduleMatch.index;
-  const lineStart = sanitizedContent.lastIndexOf('\n', moduleIndex - 1) + 1;
+  const anchorIndex = anchorMatch.index;
+  const lineStart = sanitizedContent.lastIndexOf('\n', anchorIndex - 1) + 1;
   const indentMatch = sanitizedContent
-    .slice(lineStart, moduleIndex)
+    .slice(lineStart, anchorIndex)
     .match(/^\s*/);
   const indent = indentMatch ? indentMatch[0] : '';
   const insertion = `${indent}${scriptTag}\n`;
@@ -99,4 +109,61 @@ function ensureRuntimeScript(content) {
     insertion +
     sanitizedContent.slice(lineStart)
   );
+}
+
+function validateRuntimeEnv(filePath) {
+  if (!fs.existsSync(filePath)) {
+    console.error('runtime-env.js not found:', filePath);
+    process.exit(1);
+  }
+
+  const source = fs.readFileSync(filePath, 'utf8');
+  const sandbox = {
+    window: {
+      __RUNTIME_CONFIG__: {},
+      __SECURE_RUNTIME_CONFIG__: {},
+      location: { origin: 'https://example.invalid' },
+      document: { documentElement: { lang: 'es' } },
+      navigator: { language: 'es-ES' },
+    },
+  };
+
+  try {
+    vm.runInNewContext(source, sandbox, {
+      filename: 'runtime-env.js',
+      timeout: 1000,
+    });
+  } catch (error) {
+    console.error('Failed to evaluate runtime-env.js:', error);
+    process.exit(1);
+  }
+
+  const runtimeConfig = sandbox.window && sandbox.window.__RUNTIME_CONFIG__;
+  if (!runtimeConfig || typeof runtimeConfig !== 'object') {
+    console.error('runtime-env.js did not populate window.__RUNTIME_CONFIG__.');
+    process.exit(1);
+  }
+
+  const requiredKeys = ['API_BASE_URL', 'LANG', 'FLAGS'];
+  for (const key of requiredKeys) {
+    if (!Object.prototype.hasOwnProperty.call(runtimeConfig, key)) {
+      console.error(`runtime-env.js is missing required key "${key}" in window.__RUNTIME_CONFIG__.`);
+      process.exit(1);
+    }
+  }
+
+  if (typeof runtimeConfig.API_BASE_URL !== 'string' || !runtimeConfig.API_BASE_URL.trim()) {
+    console.error('runtime-env.js must define a non-empty string API_BASE_URL.');
+    process.exit(1);
+  }
+
+  if (typeof runtimeConfig.LANG !== 'string' || !runtimeConfig.LANG.trim()) {
+    console.error('runtime-env.js must define LANG as a non-empty string.');
+    process.exit(1);
+  }
+
+  if (!runtimeConfig.FLAGS || typeof runtimeConfig.FLAGS !== 'object' || Array.isArray(runtimeConfig.FLAGS)) {
+    console.error('runtime-env.js must define FLAGS as an object.');
+    process.exit(1);
+  }
 }
