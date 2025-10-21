@@ -13,7 +13,7 @@ import {
   getQtyInputValue
 } from './ui-helpers.js';
 import { register, update as updateState } from './utils/stateManager.js';
-import { initLazyImages, observeSection } from './utils/lazyLoader.js';
+import { initLazyImages } from './utils/lazyLoader.js';
 import { isFeatureEnabled } from './utils/featureFlags.js';
 
 // Helpers para el input de cantidad global y mensajes de error se
@@ -40,6 +40,99 @@ function renderWiki(name, nameEn = null) {
 }
 
 // --- Helpers de UI ---
+
+const tabLoaders = new Map();
+let tabLoaderEventsInstalled = false;
+
+function isTabActive(tabId) {
+  const tabElement = document.getElementById(tabId);
+  return Boolean(tabElement && tabElement.classList.contains('active'));
+}
+
+function scheduleTabRetry(tabId, entry) {
+  if (!entry) return;
+  if (entry.retryTimeout) return;
+  entry.retryTimeout = setTimeout(() => {
+    entry.retryTimeout = null;
+    tryLoadTabContent(tabId);
+  }, 300);
+}
+
+function tryLoadTabContent(tabId) {
+  const entry = tabLoaders.get(tabId);
+  if (!entry || entry.loaded || entry.loading) return;
+  if (!isTabActive(tabId)) return;
+
+  entry.loading = true;
+  const handleResult = (value) => {
+    if (value === false) {
+      entry.loaded = false;
+      scheduleTabRetry(tabId, entry);
+    } else {
+      entry.loaded = true;
+    }
+  };
+  const finish = () => {
+    entry.loading = false;
+  };
+
+  try {
+    const result = entry.loader();
+    if (result && typeof result.then === 'function') {
+      result.then((value) => {
+        handleResult(value);
+      }).catch(err => {
+        console.error(`Error cargando contenido para la pestaña ${tabId}`, err);
+        entry.loaded = false;
+      }).finally(() => {
+        finish();
+      });
+    } else {
+      handleResult(result);
+      finish();
+    }
+  } catch (err) {
+    console.error(`Error cargando contenido para la pestaña ${tabId}`, err);
+    entry.loaded = false;
+    finish();
+  }
+}
+
+function ensureTabLoaderEvents() {
+  if (tabLoaderEventsInstalled) return;
+  tabLoaderEventsInstalled = true;
+
+  document.addEventListener('tabchange', (event) => {
+    const tabId = event?.detail?.tabId;
+    if (tabId) {
+      tryLoadTabContent(tabId);
+    }
+  });
+
+  const onReady = () => {
+    tabLoaders.forEach((_, id) => {
+      tryLoadTabContent(id);
+    });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', onReady, { once: true });
+  } else {
+    onReady();
+  }
+}
+
+function registerTabLazyLoader(tabId, loader) {
+  if (!tabId || typeof loader !== 'function') return;
+  tabLoaders.set(tabId, {
+    loader,
+    loaded: false,
+    loading: false,
+    retryTimeout: null
+  });
+  ensureTabLoaderEvents();
+  tryLoadTabContent(tabId);
+}
 
 
 // --- Renderizado recursivo de ingredientes ---
@@ -547,13 +640,16 @@ async function renderItemUI(itemData, marketData) {
   const resumenMercadoDiv = document.getElementById('resumen-mercado');
 
   if (resumenMercadoDiv) {
+    resumenMercadoDiv.innerHTML = '';
     const skeletonMarket = document.createElement('div');
     skeletonMarket.classList.add('skeleton', 'skeleton-market-summary');
     resumenMercadoDiv.appendChild(skeletonMarket);
 
-    observeSection(resumenMercadoDiv, () => {
+    registerTabLazyLoader('resumen-mercado', () => {
       hideSkeleton(skeletonMarket);
-      resumenMercadoDiv.insertAdjacentHTML('beforeend', renderResumenMercado(marketData));
+      if (!resumenMercadoDiv.querySelector('table')) {
+        resumenMercadoDiv.insertAdjacentHTML('beforeend', renderResumenMercado(marketData));
+      }
     });
   }
 
@@ -806,6 +902,20 @@ window.safeRenderTable = safeRenderTable;
 async function initItemUI(itemData, marketData) {
   window._lastItemData = itemData;
   window._lastMarketData = marketData;
+  window._currentItemId = itemData?.id ?? null;
+
+  registerTabLazyLoader('tab-mejores-horas-content', () => {
+    const itemId = window._currentItemId || itemData?.id;
+    if (!itemId) {
+      return false;
+    }
+    if (typeof window.cargarMejoresHorasYMercado !== 'function') {
+      console.warn('Servicios de mejores horas no disponibles: cargarMejoresHorasYMercado no está definido.');
+      return false;
+    }
+    return window.cargarMejoresHorasYMercado(itemId);
+  });
+
   const skeleton = document.getElementById('item-skeleton');
   hideError();
   try {
