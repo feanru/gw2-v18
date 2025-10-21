@@ -35,6 +35,15 @@ Este proyecto utiliza una base de datos MongoDB para almacenar colecciones de **
 - `{ updatedAt: -1 }` para recuperar el último resumen consolidado.
 - `{ fingerprint: 1 }` (filtro parcial) para los contadores por tipo de error.
 
+### aggregateSnapshots
+
+- `{ itemId: 1, lang: 1 }` (índice único para reutilizar snapshots por idioma).
+- `{ itemId: 1, lang: 1, snapshotAt: -1 }` con `partialFilterExpression` (`snapshotAt` existente) y TTL configurable mediante `AGGREGATE_SNAPSHOT_RETENTION_DAYS` (en días, por defecto **90**).
+
+### operationalEvents
+
+- `{ type: 1, timestamp: -1 }` con `partialFilterExpression` y TTL ajustable con `OPERATIONAL_EVENT_RETENTION_DAYS` (por defecto **30** días). Permite consultar rápidamente alertas y eventos operativos recientes.
+
 ### Migración
 
 Ejecuta el siguiente comando para crear los índices anteriores en la base de datos configurada por la variable `MONGO_URL` (por defecto `mongodb://localhost:27017/gw2`):
@@ -44,6 +53,19 @@ npm run migrate:mongo
 ```
 
 El comando anterior ejecuta el script [`backend/setup.mongo.js`](setup.mongo.js) que se encarga de crear los índices.
+
+## Auditoría de índices y planes de consulta
+
+El script [`scripts/analyze-mongo.js`](../scripts/analyze-mongo.js) ejecuta `db.collection.stats()` y `explain()` sobre las consultas más comunes de cada colección. Puedes integrarlo en CI o cron para validar que los índices siguen teniendo el tamaño esperado:
+
+```bash
+npm run analyze:mongo -- --json > mongo-report.json
+```
+
+Variables útiles:
+
+- `ANALYZE_MONGO_COLLECTIONS`: lista separada por comas con las colecciones a inspeccionar (por defecto `items,prices,recipes,apiMetrics,aggregateSnapshots,jsErrors`).
+- `MONGO_ANALYZE_INDEX_THRESHOLD`: umbral de tamaño de índices (en bytes) para marcar una colección como excedida. Si no se define, se reutiliza `ADMIN_INDEX_SIZE_ALERT_BYTES`.
 
 ### Preferencia de lectura
 
@@ -99,6 +121,10 @@ Variables de entorno relevantes:
 - `SNAPSHOT_ARCHIVE_COLLECTION` / `SNAPSHOT_COLLECTION`: nombres de colecciones para los datos origen y archivo.
 - `SNAPSHOT_CLEANUP_INTERVAL` (por defecto **6 horas**): frecuencia del job de limpieza.
 - `DASHBOARD_CACHE_MS` (por defecto **60000**): ventana de caché para reutilizar el snapshot del dashboard al ajustar intervalos.
+- `JS_ERROR_BACKUP_ENABLED` (por defecto **false**): activa el respaldo de documentos antiguos de `jsErrors` en `JS_ERROR_BACKUP_COLLECTION` antes de eliminarlos.
+- `JS_ERROR_MIN_RETENTION_DAYS` (por defecto **7**): límite inferior de retención para `jsErrors` para evitar depurar datos demasiado recientes.
+- `PRICE_HISTORY_RETENTION_DAYS` (por defecto **90**): retención para colecciones históricas de precios (`PRICE_HISTORY_COLLECTION`).
+- `PRICE_HISTORY_BACKUP_ENABLED` y `PRICE_HISTORY_BACKUP_COLLECTION`: controlan el respaldo opcional previo a la purga de `priceHistory`.
 
 Al ejecutar `npm run migrate:mongo` se crean/actualizan los índices necesarios, incluido el TTL dinámico de `apiMetrics` y los índices de `apiMetricsArchive` (`day` único y `archivedAt`).
 
@@ -129,5 +155,8 @@ Variables relevantes:
 - `ADMIN_ALERT_WEBHOOK_URL`: URL opcional para enviar alertas (se realiza un `POST` con los detalles del evento).
 - `ADMIN_ALERT_WEBHOOK_COOLDOWN_MS` (por defecto **300000**): enfriamiento mínimo entre notificaciones al mismo webhook.
 - `JS_ERROR_RETENTION_DAYS` (por defecto **30**): días que se conservan los eventos individuales en `jsErrors`.
+- `ADMIN_INDEX_SIZE_ALERT_BYTES` (por defecto **0**, desactivado): umbral de tamaño de índices que dispara la alerta `mongo-index-footprint` en el dashboard.
+- `ADMIN_INDEX_MONITORED_COLLECTIONS`: lista separada por comas con las colecciones a auditar en el dashboard (por defecto `items,prices,recipes,apiMetrics,aggregateSnapshots,jsErrors`).
 
 El snapshot del dashboard de administración (`/admin/dashboard`) ahora incluye el bloque `jsErrors` con los agregados de la ventana reciente (`count`, `perMinute`, `lastMessage`, `top`, etc.) y un nuevo campo `lastUpdatedAgeMinutes` en cada colección de `freshness`. Cuando la edad supera `ADMIN_FRESHNESS_ALERT_THRESHOLD_MINUTES` o la tasa de errores JS rebasa `ADMIN_JS_ERROR_ALERT_THRESHOLD_PER_MINUTE`, se añaden alertas automáticas, se registran en consola y, si hay webhook configurado, se envían notificaciones.
+Además, el dashboard expone la sección `mongo.indexStats` con el tamaño de los índices monitorizados. Si alguno supera el umbral configurado, se genera una alerta `mongo-index-footprint`, visible en la interfaz y reutilizable por el planificador para ajustar tareas.

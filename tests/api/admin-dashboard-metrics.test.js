@@ -1,21 +1,53 @@
 const assert = require('assert');
 
 process.env.NODE_ENV = 'test';
+process.env.ADMIN_INDEX_SIZE_ALERT_BYTES = '1024';
 
 const api = require('../../backend/api/index.js');
 
 function createDbStub(statuses) {
+  const statsMap = {
+    items: { count: 120, storageSize: 4096, totalIndexSize: 4096, indexSizes: { itemIndex: 4096 } },
+    prices: { count: 80, storageSize: 2048, totalIndexSize: 512 },
+    recipes: { count: 60, storageSize: 1024, totalIndexSize: 384 },
+    apiMetrics: { count: 0, storageSize: 512, totalIndexSize: 256 },
+    aggregateSnapshots: { count: 12, storageSize: 1024, totalIndexSize: 128 },
+    jsErrors: { count: 5, storageSize: 256, totalIndexSize: 64 },
+  };
+
+  function createCollection(name, overrides = {}) {
+    const stats = statsMap[name] || { count: 0, storageSize: 0, totalIndexSize: 0 };
+    return {
+      countDocuments: async () => 0,
+      find: () => ({
+        sort: () => ({
+          limit: () => ({
+            next: async () => null,
+          }),
+        }),
+      }),
+      stats: async () => ({ ...stats }),
+      ...overrides,
+    };
+  }
+
   const collections = {
-    apiMetrics: {
+    apiMetrics: createCollection('apiMetrics', {
       find: () => ({
         toArray: async () => [],
       }),
-    },
+    }),
     syncStatus: {
       find: () => ({
         toArray: async () => statuses,
       }),
+      stats: async () => ({ count: statuses.length, storageSize: 0, totalIndexSize: 0 }),
     },
+    items: createCollection('items'),
+    prices: createCollection('prices'),
+    recipes: createCollection('recipes'),
+    aggregateSnapshots: createCollection('aggregateSnapshots'),
+    jsErrors: createCollection('jsErrors'),
   };
 
   return {
@@ -23,16 +55,7 @@ function createDbStub(statuses) {
       if (collections[name]) {
         return collections[name];
       }
-      return {
-        countDocuments: async () => 0,
-        find: () => ({
-          sort: () => ({
-            limit: () => ({
-              next: async () => null,
-            }),
-          }),
-        }),
-      };
+      return createCollection(name || 'unknown');
     },
   };
 }
@@ -95,6 +118,10 @@ async function run() {
     const alertTypes = snapshot.alerts.map((alert) => alert.type);
     assert.ok(alertTypes.includes('freshness-stale'), 'should include freshness-stale alert');
     assert.ok(alertTypes.includes('js-error-rate'), 'should include js-error-rate alert');
+    assert.ok(alertTypes.includes('mongo-index-footprint'), 'should include mongo-index-footprint alert');
+
+    assert.ok(snapshot.mongo, 'mongo section should exist');
+    assert.strictEqual(snapshot.mongo.indexStats.items.exceeded, true);
 
     console.log('tests/api/admin-dashboard-metrics.test.js passed');
   } finally {
