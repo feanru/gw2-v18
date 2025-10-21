@@ -395,6 +395,7 @@ async function runBuild({ itemId, lang, config }) {
       stale: false,
       warnings,
       errors: [],
+      precomputed: false,
     };
     const payload = {
       data: {
