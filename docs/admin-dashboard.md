@@ -58,9 +58,27 @@ El endpoint `GET /admin/dashboard` devuelve un snapshot con métricas operativas
       { "fingerprint": "a1b2c3", "count": 20, "message": "ReferenceError: boom" }
     ]
   },
+  "mongo": {
+    "indexSizeAlertThreshold": 104857600,
+    "indexStats": {
+      "items": {
+        "totalIndexSize": 16777216,
+        "storageSize": 33554432,
+        "count": 52341,
+        "exceeded": false
+      },
+      "apiMetrics": {
+        "totalIndexSize": 5242880,
+        "storageSize": 12582912,
+        "count": 6721,
+        "exceeded": false
+      }
+    }
+  },
   "alerts": [
     { "type": "freshness-stale", "collection": "items", "ageMinutes": 75 },
-    { "type": "js-error-rate", "perMinute": 6.4 }
+    { "type": "js-error-rate", "perMinute": 6.4 },
+    { "type": "mongo-index-footprint", "collection": "items", "totalIndexSize": 16777216 }
   ]
 }
 ```
@@ -69,6 +87,7 @@ El endpoint `GET /admin/dashboard` devuelve un snapshot con métricas operativas
 
 - **freshness.*.lastUpdatedAgeMinutes**: minutos transcurridos desde la última actualización conocida de cada colección.
 - **jsErrors**: métricas agregadas de la ventana reciente. `perMinute` se compara con `ADMIN_JS_ERROR_ALERT_THRESHOLD_PER_MINUTE` para generar alertas.
+- **mongo.indexStats**: resumen del tamaño de índices (`totalIndexSize`) y almacenamiento (`storageSize`) para las colecciones monitorizadas. Cuando un valor supera `ADMIN_INDEX_SIZE_ALERT_BYTES`, el dashboard genera la alerta `mongo-index-footprint`.
 - **alerts**: lista de alertas activas. Las nuevas claves `freshness-stale` y `js-error-rate` se registran en consola y pueden enviar un webhook si `ADMIN_ALERT_WEBHOOK_URL` está definido.
 
 Las métricas se calculan usando la misma ventana definida por `ADMIN_DASHBOARD_WINDOW_MINUTES`. Si necesitas ampliar o reducir la sensibilidad, ajusta las variables de entorno descritas en [`backend/README.md`](../backend/README.md).

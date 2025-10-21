@@ -1,6 +1,70 @@
 const { MongoClient } = require('mongodb');
 
 const url = process.env.MONGO_URL || 'mongodb://localhost:27017/gw2';
+const aggregateSnapshotCollectionName =
+  process.env.AGGREGATE_SNAPSHOT_COLLECTION || 'aggregateSnapshots';
+const aggregateSnapshotRetentionDays = Number.parseInt(
+  process.env.AGGREGATE_SNAPSHOT_RETENTION_DAYS || '90',
+  10,
+);
+const operationalEventCollectionName =
+  process.env.OPERATIONAL_EVENT_COLLECTION || 'operationalEvents';
+const operationalEventRetentionDays = Number.parseInt(
+  process.env.OPERATIONAL_EVENT_RETENTION_DAYS || '30',
+  10,
+);
+
+function normalizeTtlSeconds(days, fallbackDays) {
+  const parsed = Number.isFinite(days) ? days : Number(fallbackDays);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return Math.floor(parsed * 24 * 60 * 60);
+}
+
+async function ensureNamedIndex(collection, spec, options = {}) {
+  const indexes = await collection.indexes();
+  const existing = indexes.find((index) => index.name === options.name);
+  const desiredExpire = Object.prototype.hasOwnProperty.call(options, 'expireAfterSeconds')
+    ? options.expireAfterSeconds
+    : null;
+  const desiredPartial = options.partialFilterExpression || null;
+  const desiredUnique = Boolean(options.unique);
+  const normalizedOptions = { ...options };
+  if (normalizedOptions.expireAfterSeconds == null) {
+    delete normalizedOptions.expireAfterSeconds;
+  }
+  if (!normalizedOptions.partialFilterExpression) {
+    delete normalizedOptions.partialFilterExpression;
+  }
+  if (!desiredUnique) {
+    delete normalizedOptions.unique;
+  }
+
+  if (existing) {
+    const existingExpire = Object.prototype.hasOwnProperty.call(existing, 'expireAfterSeconds')
+      ? existing.expireAfterSeconds
+      : null;
+    const existingPartial = existing.partialFilterExpression || null;
+    const existingUnique = Boolean(existing.unique);
+    const sameExpire = existingExpire === desiredExpire;
+    const samePartial = JSON.stringify(existingPartial || null) === JSON.stringify(desiredPartial || null);
+    const sameUnique = existingUnique === desiredUnique;
+    if (!sameExpire || !samePartial || !sameUnique) {
+      try {
+        await collection.dropIndex(existing.name);
+      } catch (err) {
+        if (err && err.codeName !== 'IndexNotFound') {
+          throw err;
+        }
+      }
+    } else {
+      return;
+    }
+  }
+
+  await collection.createIndex(spec, normalizedOptions);
+}
 
 async function ensureIndexes() {
   const client = new MongoClient(url);
@@ -49,6 +113,44 @@ async function ensureIndexes() {
       name: 'apiMetrics_createdAt_ttl',
     });
     await metrics.createIndex({ endpoint: 1, createdAt: 1 });
+
+    const aggregateSnapshots = db.collection(aggregateSnapshotCollectionName);
+    await ensureNamedIndex(
+      aggregateSnapshots,
+      { itemId: 1, lang: 1 },
+      {
+        unique: true,
+        name: 'aggregateSnapshots_item_lang_unique',
+      },
+    );
+    const aggregateSnapshotTtlSeconds = normalizeTtlSeconds(
+      aggregateSnapshotRetentionDays,
+      90,
+    );
+    await ensureNamedIndex(
+      aggregateSnapshots,
+      { itemId: 1, lang: 1, snapshotAt: -1 },
+      {
+        name: 'aggregateSnapshots_item_lang_snapshotAt',
+        partialFilterExpression: { snapshotAt: { $exists: true } },
+        expireAfterSeconds: aggregateSnapshotTtlSeconds,
+      },
+    );
+
+    const operationalEvents = db.collection(operationalEventCollectionName);
+    const operationalEventTtlSeconds = normalizeTtlSeconds(
+      operationalEventRetentionDays,
+      30,
+    );
+    await ensureNamedIndex(
+      operationalEvents,
+      { type: 1, timestamp: -1 },
+      {
+        name: 'operationalEvents_type_timestamp',
+        partialFilterExpression: { timestamp: { $exists: true } },
+        expireAfterSeconds: operationalEventTtlSeconds,
+      },
+    );
 
     const metricsArchive = db.collection('apiMetricsArchive');
     await metricsArchive.createIndex({ day: 1 }, { unique: true });

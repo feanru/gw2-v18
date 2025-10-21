@@ -12,6 +12,7 @@
     "bump:cache": "bash scripts/bump-cache-version.sh",
     "purge:cdn": "node scripts/purge-cdn.js",
     "lint:domains": "node scripts/check-allowed-domains.mjs",
+    "analyze:mongo": "node scripts/analyze-mongo.js",
     "check-runtime": "node tests/runtime-order.test.mjs"
   },
   "dependencies": {
