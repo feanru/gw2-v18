@@ -66,28 +66,80 @@ if (typeof window !== 'undefined') {
 }
 // Manejo de pestañas en dones.html
 document.addEventListener('DOMContentLoaded', async function() {
-  await import('./tabs.min.js');
-  const loaded = {};
+  const loadedTabs = new Set();
+  const loadingTabs = new Set();
 
-  function handleTab(tabId) {
+  const buttons = Array.from(document.querySelectorAll('.tab-button[data-tab]'));
+  const contents = Array.from(document.querySelectorAll('.tab-content'));
+
+  const savedTabId = localStorage.getItem('activeDonTab');
+  if (savedTabId) {
+    const savedButton = buttons.find(btn => btn.getAttribute('data-tab') === savedTabId);
+    const savedContent = document.getElementById(savedTabId);
+    if (savedButton && savedContent) {
+      buttons.forEach(btn => {
+        const isActive = btn === savedButton;
+        btn.classList.toggle('active', isActive);
+      });
+      contents.forEach(content => {
+        const isActive = content === savedContent;
+        content.classList.toggle('active', isActive);
+        content.style.display = isActive ? '' : 'none';
+      });
+    }
+  }
+
+  const waitForDonesPages = () => {
+    if (window.DonesPages) return Promise.resolve();
+    return new Promise(resolve => {
+      const listener = () => {
+        document.removeEventListener('donespages:ready', listener);
+        resolve();
+      };
+      document.addEventListener('donespages:ready', listener, { once: true });
+    });
+  };
+
+  const tabsPromise = import('./tabs.min.js');
+  const donesPagesReady = waitForDonesPages();
+  const ready = Promise.all([tabsPromise, donesPagesReady]);
+
+  const loadHandlers = {
+    'tab-don-suerte': () => window.DonesPages?.loadSpecialDons(),
+    'tab-tributo-mistico': () => window.DonesPages?.loadTributo(),
+    'tab-tributo-draconico': () => window.DonesPages?.loadDraconicTribute(),
+    'dones-1ra-gen': () => window.DonesPages?.loadDones1Gen()
+  };
+
+  async function handleTab(tabId) {
+    if (!tabId) return;
     localStorage.setItem('activeDonTab', tabId);
-    if (!loaded[tabId] && window.DonesPages) {
-      loaded[tabId] = true;
-      if (tabId === 'tab-don-suerte') window.DonesPages.loadSpecialDons();
-      else if (tabId === 'tab-tributo-mistico') window.DonesPages.loadTributo();
-      else if (tabId === 'tab-tributo-draconico') window.DonesPages.loadDraconicTribute();
-      else if (tabId === 'dones-1ra-gen') window.DonesPages.loadDones1Gen();
+    if (loadedTabs.has(tabId) || loadingTabs.has(tabId)) return;
+    const loader = loadHandlers[tabId];
+    if (!loader) return;
+    loadingTabs.add(tabId);
+    try {
+      await ready;
+      const loadResult = loader();
+      await loadResult;
+      loadedTabs.add(tabId);
+    } finally {
+      loadingTabs.delete(tabId);
     }
   }
 
   document.addEventListener('tabchange', e => {
-    handleTab(e.detail.tabId);
+    const tabId = e && e.detail ? e.detail.tabId : undefined;
+    handleTab(tabId);
   });
 
-  const savedTab = localStorage.getItem('activeDonTab');
-  const target = savedTab
-    ? document.querySelector(`.tab-button[data-tab="${savedTab}"]`)
-    : document.querySelector('.tab-button[data-tab]');
-  if (target) target.click();
+  await tabsPromise;
+
+  const activeContent = document.querySelector('.tab-content.active');
+  if (activeContent) {
+    handleTab(activeContent.id);
+  } else if (buttons.length) {
+    buttons[0].click();
+  }
 });
 })();

@@ -1287,6 +1287,8 @@ window.DonesPages = {
   loadDones1Gen
 };
 
+document.dispatchEvent(new Event('donespages:ready'));
+
 // === Tributo Dracónico ===
 async function renderTributoDraconico() {
   const container = document.getElementById('tributo-draconico-content');
