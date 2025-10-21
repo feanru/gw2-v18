@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 
 function getFreshModuleId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -394,6 +395,50 @@ async function testPaginationRequests() {
   });
 }
 
+async function testPerformanceP95() {
+  const suffix = getFreshModuleId('perf');
+  const durations = [];
+  let fetchCalls = 0;
+
+  await withPatchedFetch(async () => {
+    fetchCalls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 8));
+    return {
+      ok: true,
+      headers: {
+        get(name) {
+          return String(name).toLowerCase() === 'content-type' ? 'application/json' : null;
+        },
+      },
+      async json() {
+        return {
+          priceMap: { 101: { buy_price: 11, sell_price: 22 } },
+          iconMap: { 101: 'https://cdn.test/icon-101.png' },
+          rarityMap: { 101: 'Legendario' },
+          itemMap: { 101: { id: 101, name: 'Perf' } },
+          meta: { source: 'aggregate', stale: false, warnings: [] },
+        };
+      },
+    };
+  }, async () => {
+    const module = await importService(suffix);
+    const { fetchDonesAggregate, __resetDonesAggregateCacheForTests } = module;
+    await __resetDonesAggregateCacheForTests();
+    const iterations = 30;
+    for (let i = 0; i < iterations; i += 1) {
+      const start = performance.now();
+      await fetchDonesAggregate([101], { ttl: 60_000 });
+      durations.push(performance.now() - start);
+    }
+  });
+
+  assert.equal(fetchCalls, 1, 'Solo debe realizar fetch en la primera iteración');
+  const sorted = durations.slice().sort((a, b) => a - b);
+  const index = Math.max(0, Math.floor(sorted.length * 0.95) - 1);
+  const p95 = sorted[index];
+  assert.ok(p95 < 5, `El p95 esperado debe ser <5ms pero fue ${p95}`);
+}
+
 async function run() {
   await testCacheReuse();
   await testPartialResponse();
@@ -402,6 +447,7 @@ async function run() {
   await testTtlRefresh();
   await testTtlRefreshWithMissingIds();
   await testPaginationRequests();
+  await testPerformanceP95();
   console.log('tests/frontend/dones-aggregate-service.test.mjs passed');
 }
 

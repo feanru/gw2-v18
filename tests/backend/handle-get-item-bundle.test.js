@@ -5,6 +5,9 @@ process.env.NODE_ENV = 'test';
 const legacyHandlersModule = require('../../backend/api/legacy/handlers.js');
 const originalCreateLegacyHandlers = legacyHandlersModule.createLegacyHandlers;
 const apiModulePath = require.resolve('../../backend/api/index.js');
+const { registerMockDeps } = require('../helpers/register-mock-deps.js');
+
+const restoreDeps = registerMockDeps();
 
 function loadApi({ legacyHandler } = {}) {
   delete require.cache[apiModulePath];
@@ -212,11 +215,59 @@ async function testPropagatesFallbackErrorsWhenAggregateFails() {
   assert.strictEqual(payload.errors[0]?.code, 'legacy_failed');
 }
 
+async function testRejectsHtmlFallbackResponse() {
+  let fallbackCalls = 0;
+  const api = loadApi({
+    legacyHandler: async (_req, res) => {
+      fallbackCalls += 1;
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end('<html><body>legacy bundle</body></html>');
+    },
+  });
+
+  const context = { traceId: 'bundle-html', ts: '2024-04-01T13:00:00.000Z' };
+  const request = createMockRequest(context);
+  const response = createMockResponse(context);
+  const url = new URL('http://localhost/api/items/bundle?ids=999');
+
+  await withAggregateOverrides(
+    api,
+    {
+      getCachedAggregate: async () => null,
+      buildItemAggregate: async () => null,
+    },
+    async () => {
+      await api.handleGetItemBundle(request, response, url, 'es');
+    },
+  );
+
+  assert.strictEqual(fallbackCalls, 1, 'Debe invocar el fallback una vez incluso si retorna HTML');
+  assert.strictEqual(response.statusCode, 502, 'Debe devolver 502 cuando el fallback no entrega JSON');
+  const contentType = response.headers['Content-Type'] || response.headers['content-type'];
+  assert.ok(
+    typeof contentType === 'string' && contentType.includes('application/json'),
+    'La respuesta final debe ser JSON',
+  );
+  const payload = JSON.parse(response.body);
+  assert.strictEqual(payload.meta.source, 'fallback');
+  assert.strictEqual(payload.meta.stale, true);
+  assert.ok(Array.isArray(payload.errors));
+  assert.strictEqual(payload.errors[0]?.code, 'aggregate_fallback_invalid');
+  assert.ok(
+    payload.errors.some((error) => error?.code === 'fallback_invalid_json'),
+    'Debe incluir el error de JSON inválido del fallback',
+  );
+}
+
 async function run() {
   await testReturnsAggregateMetaWhenResolved();
   await testUsesFallbackWhenAggregateIncomplete();
   await testPropagatesFallbackErrorsWhenAggregateFails();
+  await testRejectsHtmlFallbackResponse();
   console.log('tests/backend/handle-get-item-bundle.test.js passed');
+  if (typeof restoreDeps === 'function') {
+    restoreDeps();
+  }
 }
 
 run().catch((err) => {
