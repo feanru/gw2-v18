@@ -431,11 +431,83 @@ async function runLegacyItemApiFallbackTest() {
   env.teardown();
 }
 
+async function runAggregateIncompleteDataTest() {
+  const env = setupDomEnvironment('aggregate-incomplete');
+  const calls = [];
+  globalThis.__TEST_FETCH_ITEM_AGGREGATE__ = async () => {
+    calls.push('/api/items/987/aggregate');
+    return {
+      data: {
+        item: {
+          id: 987,
+          name: 'Item incompleto',
+          icon: 'icon.png',
+          rarity: 'rare',
+        },
+        market: null,
+        tree: null,
+      },
+      meta: { warnings: ['partial'] },
+      status: 200,
+    };
+  };
+
+  const module = await import(`../src/js/item-loader.js?aggregate-incomplete=${Date.now()}`);
+  await module.loadItem(987);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(calls.length, 1, 'Debe consultar el agregado una única vez');
+  assert.equal(window.__aggregateFallbacks__.length, 0, 'No debe registrar fallback al legacy');
+  assert.equal(window.__lastError, null, 'No debe mostrar errores visibles');
+  assert.equal(window.__skeletonHidden, true, 'Debe ocultar el skeleton aun con datos parciales');
+
+  env.teardown();
+}
+
+async function runLegacyPartialPayloadTest() {
+  const env = setupDomEnvironment('legacy-partial');
+  globalThis.__TEST_FETCH_ITEM_AGGREGATE__ = async () => ({
+    data: { item: null },
+    meta: { errors: ['missing'] },
+    status: 200,
+  });
+
+  globalThis.__TEST_FETCH_WITH_RETRY__ = async () =>
+    createMockResponse({
+      body: {
+        data: {
+          item: {
+            id: 654,
+            name: 'Item Legacy',
+            icon: 'legacy.png',
+            rarity: 'exotic',
+          },
+          recipe: null,
+          market: {},
+        },
+        meta: {},
+      },
+    });
+
+  const module = await import(`../src/js/item-loader.js?legacy-partial=${Date.now()}`);
+  await module.loadItem(654);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(window.__legacyInitCalls, 1, 'Debe inicializar la UI legacy con datos parciales');
+  assert.equal(window.__lastError, null, 'No debe mostrar errores al usuario');
+  assert.equal(window._mainBuyPrice, 0, 'Debe dejar el precio de compra en cero');
+  assert.equal(window._mainSellPrice, 0, 'Debe dejar el precio de venta en cero');
+
+  env.teardown();
+}
+
 async function run() {
   await runMissingItemFallbackTest();
   await runAggregateThrowsFallbackTest();
   await runLegacyItemApiSuccessTest();
   await runLegacyItemApiFallbackTest();
+  await runAggregateIncompleteDataTest();
+  await runLegacyPartialPayloadTest();
   console.log('item-loader aggregate fallback tests passed');
 }
 

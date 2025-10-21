@@ -5,7 +5,13 @@ import { isFeatureEnabled } from './utils/featureFlags.js';
 import { getConfig } from './config.js';
 import { getBucket } from './utils/canaryBucket.js';
 import { fetchItemAggregate } from './services/aggregateService.js';
-import { toUiModel } from './adapters/aggregateAdapter.js';
+import {
+  toUiModel as toAggregateUiModel,
+  mergePriceSummaries,
+  toPriceSummary,
+} from './adapters/aggregateAdapter.js';
+import { toUiModel as toLegacyUiModel } from './adapters/legacyAdapter.js';
+import { fromEntry as priceEntryToSummary } from './adapters/priceAdapter.js';
 import { hydrateAggregateTree } from './utils/aggregateHydrator.js';
 import { renderFreshnessBanner, hideFreshnessBanner } from './utils/freshnessBanner.js';
 import { recordAggregateDuration, trackTelemetryEvent, now as telemetryNow } from './utils/telemetry.js';
@@ -182,24 +188,25 @@ async function loadItemUsingAggregate(itemId, skeleton, currentToken, context = 
     window.showSkeleton?.(skeleton);
     itemDetailsController = new AbortController();
     const aggregateFetcher = getAggregateFetcher();
-    const raw = await aggregateFetcher(itemId, {
+    const response = await aggregateFetcher(itemId, {
       signal: itemDetailsController.signal,
     });
-    if (raw?.status === 304 && raw.fromCache) {
-      lastMeta = raw.meta || null;
+    const aggregateModel = response?.model
+      || toAggregateUiModel({ data: response?.data, meta: response?.meta });
+    if (response?.status === 304 && response.fromCache) {
+      lastMeta = aggregateModel?.meta || response?.meta || null;
       window.hideSkeleton?.(skeleton);
-      renderFreshnessBanner(raw.meta);
+      renderFreshnessBanner(aggregateModel?.meta);
       trackTelemetryEvent({
         type: 'aggregateNotModified',
         bucket,
-        meta: { stale: raw.meta?.stale ?? null },
+        meta: { stale: aggregateModel?.meta?.stale ?? null },
       });
       return;
     }
     stopPreviousPriceUpdater();
     stopPriceUpdaterIfNeeded();
-    const uiModel = toUiModel(raw);
-    const { item, market, tree, meta } = uiModel;
+    const { item, market, tree, meta, prices } = aggregateModel;
     lastMeta = meta || null;
     if (currentToken !== loadToken) return;
 
@@ -217,10 +224,16 @@ async function loadItemUsingAggregate(itemId, skeleton, currentToken, context = 
     const rootIngredient = hydrateAggregateTree(tree);
     const ingredientList = rootIngredient ? [rootIngredient] : [];
     setIngredientObjs(ingredientList);
-    setTotalsFromAggregate(market);
+    const priceSummary = prices?.hasData ? prices : toPriceSummary(market);
+    const totals = {
+      buy: priceSummary?.totals?.buy ?? market?.buy ?? null,
+      sell: priceSummary?.totals?.sell ?? market?.sell ?? null,
+      crafted: priceSummary?.totals?.crafted ?? market?.crafted ?? null,
+    };
+    setTotalsFromAggregate(totals);
 
-    const unitBuy = market?.unitBuyPrice ?? rootIngredient?.buy_price ?? 0;
-    const unitSell = market?.unitSellPrice ?? rootIngredient?.sell_price ?? 0;
+    const unitBuy = priceSummary?.unit?.buy ?? rootIngredient?.buy_price ?? 0;
+    const unitSell = priceSummary?.unit?.sell ?? rootIngredient?.sell_price ?? 0;
     window._mainBuyPrice = unitBuy || 0;
     window._mainSellPrice = unitSell || 0;
     window._mainRecipeOutputCount = rootIngredient?.recipe?.output_item_count
@@ -356,22 +369,22 @@ export async function loadItemLegacy(itemId, skeleton, currentToken, context = {
     }
 
     const { data, meta } = normalizeApiResponse(raw);
+    const legacyModel = toLegacyUiModel({ data, meta });
     trackTelemetryEvent({
       type: 'legacyLoad',
       bucket,
       meta: {
-        stale: meta?.stale ?? null,
+        stale: legacyModel?.meta?.stale ?? null,
         fromFallback: Boolean(fromFallback),
         fallbackReason,
       },
     });
-    const item = data?.item || null;
-    const recipe = data?.recipe || null;
-    const market = data?.market || null;
-    const nestedRecipe = data?.nested_recipe || null;
+    const item = legacyModel.item;
+    const recipe = legacyModel.primaryRecipe;
+    const nestedRecipe = legacyModel.nestedRecipe;
 
     if (!item) {
-      const errorMessage = meta?.errors?.[0] || 'El ítem no existe';
+      const errorMessage = legacyModel?.meta?.errors?.[0] || meta?.errors?.[0] || 'El ítem no existe';
       window.showError?.(errorMessage);
       window.hideSkeleton?.(skeleton);
       return;
@@ -379,25 +392,29 @@ export async function loadItemLegacy(itemId, skeleton, currentToken, context = {
     if (currentToken !== loadToken) return;
 
     // El skeleton se ocultará tras renderizar la UI
-    marketData = Array.isArray(market) || !market ? {} : { ...market };
-    if (
-      Array.isArray(market) ||
-      marketData.buy_price == null ||
-      marketData.sell_price == null
-    ) {
+    const baseMarket = Array.isArray(legacyModel.market) || !legacyModel.market
+      ? {}
+      : { ...legacyModel.market };
+    let priceSummary = legacyModel.prices;
+    if (!priceSummary?.hasData) {
       try {
         const fallbackPrice = await getPrice(itemId);
         if (fallbackPrice) {
-          marketData = { ...marketData, ...fallbackPrice };
+          const fallbackSummary = priceEntryToSummary(fallbackPrice);
+          priceSummary = mergePriceSummaries(priceSummary, fallbackSummary);
         }
       } catch (priceErr) {
         console.warn('No se pudo recuperar el precio de respaldo', priceErr);
       }
     }
-    marketData.buy_price = marketData.buy_price ?? 0;
-    marketData.sell_price = marketData.sell_price ?? 0;
-    window._mainBuyPrice = marketData.buy_price;
-    window._mainSellPrice = marketData.sell_price;
+    const ensuredSummary = priceSummary?.hasData ? priceSummary : toPriceSummary(baseMarket);
+    marketData = {
+      ...baseMarket,
+      buy_price: ensuredSummary?.unit?.buy ?? baseMarket.buy_price ?? 0,
+      sell_price: ensuredSummary?.unit?.sell ?? baseMarket.sell_price ?? 0,
+    };
+    window._mainBuyPrice = marketData.buy_price ?? 0;
+    window._mainSellPrice = marketData.sell_price ?? 0;
 
     if (!recipe) {
       setIngredientObjs([]);

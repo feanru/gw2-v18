@@ -6,6 +6,8 @@ import fetchWithRetry from '../utils/fetchWithRetry.js';
 import { getPrice, preloadPrices } from '../utils/priceHelper.js';
 import { getConfig } from '../config.js';
 import { normalizeApiResponse } from '../utils/apiResponse.js';
+import { toUiModel as toRecipeUiModel } from '../adapters/recipeAdapter.js';
+import { fromEntry as priceEntryToSummary } from '../adapters/priceAdapter.js';
 
 const MAX_BUNDLE_BATCH = 35;
 
@@ -55,10 +57,15 @@ function applyBundleEntries(payload, results) {
     if (entries.length) {
         entries.forEach(entry => {
             const entryKey = String(entry.id);
-            results.set(entryKey, entry);
-            setCached(`bundle_${entryKey}`, entry);
+            const adapters = {
+                recipe: toRecipeUiModel({ data: entry?.recipe ?? null }),
+                prices: priceEntryToSummary(entry?.market ?? null)
+            };
+            const normalizedEntry = { ...entry, adapters };
+            results.set(entryKey, normalizedEntry);
+            setCached(`bundle_${entryKey}`, normalizedEntry);
             if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
-                window.dispatchEvent(new CustomEvent('bundleItemRefreshed', { detail: entry }));
+                window.dispatchEvent(new CustomEvent('bundleItemRefreshed', { detail: normalizedEntry }));
             }
         });
     }
