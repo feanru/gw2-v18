@@ -10,7 +10,7 @@ class GuildWars2API {
   constructor() {
     this.ITEMS_ENDPOINT = 'https://api.guildwars2.com/v2/items';
     this.CACHE_PREFIX = 'gw2_api_cache_';
-    this.CACHE_DURATION = 24 * 60 * 60 * 1000;
+    this.CACHE_DURATION = 10 * 60 * 1000;
   }
 
   async _fetchWithCache(url, useCache = true) {
