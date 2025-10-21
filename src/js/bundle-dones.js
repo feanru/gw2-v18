@@ -67,7 +67,7 @@ if (typeof window !== 'undefined') {
 // Manejo de pestañas en dones.html
 document.addEventListener('DOMContentLoaded', async function() {
   const loadedTabs = new Set();
-  let pendingInitialTab = null;
+  const loadingTabs = new Map();
 
   const buttons = Array.from(document.querySelectorAll('.tab-button[data-tab]'));
   const contents = Array.from(document.querySelectorAll('.tab-content'));
@@ -89,36 +89,80 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
   }
 
-  function handleTab(tabId) {
+  const ensureDonesPagesReady = async (timeoutMs = 2000) => {
+    if (window.DonesPages) return;
+
+    await new Promise((resolve, reject) => {
+      const start = Date.now();
+      const check = () => {
+        if (window.DonesPages) {
+          resolve();
+          return;
+        }
+        if (Date.now() - start >= timeoutMs) {
+          reject(new Error('DonesPages not ready'));
+          return;
+        }
+        setTimeout(check, 50);
+      };
+      check();
+    });
+  };
+
+  const TAB_LOADERS = {
+    'tab-don-suerte': () => window.DonesPages.loadSpecialDons(),
+    'tab-tributo-mistico': () => window.DonesPages.loadTributo(),
+    'tab-tributo-draconico': () => window.DonesPages.loadDraconicTribute(),
+    'dones-1ra-gen': () => window.DonesPages.loadDones1Gen(),
+  };
+
+  const loadTab = async (tabId) => {
     if (!tabId) return;
+
     localStorage.setItem('activeDonTab', tabId);
+
     if (loadedTabs.has(tabId)) return;
-    if (!window.DonesPages) {
-      pendingInitialTab = tabId;
-      return;
+    if (loadingTabs.has(tabId)) {
+      return loadingTabs.get(tabId);
     }
-    loadedTabs.add(tabId);
-    if (tabId === 'tab-don-suerte') window.DonesPages.loadSpecialDons();
-    else if (tabId === 'tab-tributo-mistico') window.DonesPages.loadTributo();
-    else if (tabId === 'tab-tributo-draconico') window.DonesPages.loadDraconicTribute();
-    else if (tabId === 'dones-1ra-gen') window.DonesPages.loadDones1Gen();
-  }
+
+    const loaderPromise = (async () => {
+      try {
+        await ensureDonesPagesReady();
+
+        const loader = TAB_LOADERS[tabId];
+        if (!loader) return;
+
+        await loader();
+        loadedTabs.add(tabId);
+      } catch (error) {
+        console.error('Error loading tab content', tabId, error);
+      } finally {
+        loadingTabs.delete(tabId);
+      }
+    })();
+
+    loadingTabs.set(tabId, loaderPromise);
+    return loaderPromise;
+  };
+
+  const getActiveTabId = () => {
+    const active = document.querySelector('.tab-content.active');
+    return active ? active.id : null;
+  };
 
   document.addEventListener('tabchange', e => {
     const tabId = e && e.detail ? e.detail.tabId : undefined;
-    handleTab(tabId);
+    if (tabId) {
+      loadTab(tabId);
+    }
   });
 
   await import('./tabs.min.js');
 
-  if (pendingInitialTab && !loadedTabs.has(pendingInitialTab)) {
-    handleTab(pendingInitialTab);
-    pendingInitialTab = null;
-  }
-
-  const activeContent = document.querySelector('.tab-content.active');
-  if (activeContent) {
-    handleTab(activeContent.id);
+  let initialTabId = getActiveTabId();
+  if (initialTabId) {
+    await loadTab(initialTabId);
   } else if (buttons.length) {
     buttons[0].click();
   }
