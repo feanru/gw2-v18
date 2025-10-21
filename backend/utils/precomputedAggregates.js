@@ -13,6 +13,17 @@ const DEFAULT_HARD_TTL_SECONDS = Math.max(
   DEFAULT_SOFT_TTL_SECONDS,
 );
 
+function normalizeSnapshotDate(value) {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date;
+}
+
 let clientPromise = null;
 let clientInstance = null;
 let collectionPromise = null;
@@ -116,6 +127,7 @@ async function savePrecomputedAggregate({
   const storedAt = new Date();
   const expiresAt = computeExpiresAt(storedAt, hardTtlSeconds);
   const meta = markPrecomputedMeta(payload?.meta);
+  const snapshotAtDate = normalizeSnapshotDate(meta?.snapshotAt || meta?.generatedAt || null);
   const document = {
     itemId: numericId,
     lang: normalizedLang,
@@ -126,6 +138,7 @@ async function savePrecomputedAggregate({
     updatedAt: storedAt,
     expiresAt: expiresAt || null,
     precomputed: true,
+    snapshotAt: snapshotAtDate,
   };
   await collection.updateOne(
     { itemId: numericId, lang: normalizedLang },

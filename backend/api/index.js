@@ -66,6 +66,15 @@ const JS_ERROR_MAX_MESSAGE_LENGTH = 512;
 const JS_ERROR_MAX_STACK_LENGTH = 4000;
 const JS_ERROR_MAX_URL_LENGTH = 1024;
 const JS_ERROR_MAX_META_ENTRIES = 10;
+const ADMIN_INDEX_SIZE_ALERT_BYTES = Math.max(
+  Number.parseInt(process.env.ADMIN_INDEX_SIZE_ALERT_BYTES || '0', 10) || 0,
+  0,
+);
+const ADMIN_INDEX_MONITORED_COLLECTIONS = (process.env.ADMIN_INDEX_MONITORED_COLLECTIONS ||
+  'items,prices,recipes,apiMetrics,aggregateSnapshots,jsErrors')
+  .split(',')
+  .map((name) => name.trim())
+  .filter((name) => name);
 
 const API_HOST = process.env.API_HOST || '0.0.0.0';
 const API_PORT = Number(process.env.API_PORT || 3300);
@@ -2617,6 +2626,45 @@ function countFailuresSinceLastSuccess(status) {
   }, 0);
 }
 
+async function collectCollectionStats(db, names) {
+  const stats = {};
+  if (!db || !Array.isArray(names) || !names.length) {
+    return stats;
+  }
+
+  for (const rawName of names) {
+    const name = typeof rawName === 'string' ? rawName.trim() : '';
+    if (!name) {
+      continue;
+    }
+    try {
+      const collection = db.collection(name);
+      if (!collection || typeof collection.stats !== 'function') {
+        stats[name] = { ok: false, unsupported: true };
+        continue;
+      }
+      const collStats = await collection.stats();
+      stats[name] = {
+        ok: true,
+        count: Number.isFinite(collStats?.count) ? collStats.count : null,
+        storageSize: Number.isFinite(collStats?.storageSize) ? collStats.storageSize : null,
+        totalIndexSize: Number.isFinite(collStats?.totalIndexSize) ? collStats.totalIndexSize : null,
+        indexSizes: collStats?.indexSizes || null,
+      };
+    } catch (err) {
+      if (err && (err.codeName === 'NamespaceNotFound' || err.code === 26)) {
+        stats[name] = { ok: false, missing: true };
+        continue;
+      }
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(`[admin] failed to gather stats for ${name}: ${err.message}`);
+      }
+      stats[name] = { ok: false, error: err.message };
+    }
+  }
+  return stats;
+}
+
 async function fetchCollectionSummary(db, name, status, failureCutoff, nowTs) {
   const collection = db.collection(name);
   let count = 0;
@@ -2866,6 +2914,47 @@ async function buildDashboardSnapshot() {
 
   await Promise.allSettled(alertPromises);
 
+  let rawIndexStats = {};
+  try {
+    rawIndexStats = await collectCollectionStats(db, ADMIN_INDEX_MONITORED_COLLECTIONS);
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(`[admin] failed to collect index stats: ${err.message}`);
+    }
+  }
+
+  const normalizedIndexStats = {};
+  if (rawIndexStats && typeof rawIndexStats === 'object') {
+    for (const [name, entry] of Object.entries(rawIndexStats)) {
+      const totalIndexSize = Number.isFinite(entry?.totalIndexSize) ? entry.totalIndexSize : null;
+      const storageSize = Number.isFinite(entry?.storageSize) ? entry.storageSize : null;
+      const count = Number.isFinite(entry?.count) ? entry.count : null;
+      const exceeded =
+        ADMIN_INDEX_SIZE_ALERT_BYTES > 0 && totalIndexSize !== null && totalIndexSize > ADMIN_INDEX_SIZE_ALERT_BYTES;
+      if (exceeded) {
+        registerAlert({
+          type: 'mongo-index-footprint',
+          collection: name,
+          totalIndexSize,
+          thresholdBytes: ADMIN_INDEX_SIZE_ALERT_BYTES,
+          message: `El tamaño de índices de ${name} supera el umbral configurado`,
+        });
+      }
+      normalizedIndexStats[name] = {
+        totalIndexSize,
+        storageSize,
+        count,
+        exceeded,
+        missing: Boolean(entry?.missing),
+        unsupported: Boolean(entry?.unsupported),
+        error: entry?.error || null,
+      };
+      if (entry?.indexSizes && typeof entry.indexSizes === 'object') {
+        normalizedIndexStats[name].indexSizes = entry.indexSizes;
+      }
+    }
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     windowMinutes: Math.round(DASHBOARD_WINDOW_MS / 60000),
@@ -2898,6 +2987,11 @@ async function buildDashboardSnapshot() {
       windowHours: 24,
     },
     jsErrors: normalizedJsErrors,
+    mongo: {
+      indexStats: normalizedIndexStats,
+      indexSizeAlertThreshold: ADMIN_INDEX_SIZE_ALERT_BYTES > 0 ? ADMIN_INDEX_SIZE_ALERT_BYTES : null,
+      monitoredCollections: ADMIN_INDEX_MONITORED_COLLECTIONS,
+    },
     alerts,
   };
 }
