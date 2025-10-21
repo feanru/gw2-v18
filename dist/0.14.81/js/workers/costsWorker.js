@@ -1,1 +1,0 @@
-import{I as e}from"../utils.min.js";export{L as getTotals,J as rebuildTreeArray,K as recalcAll}from"../utils.min.js";import"../config.min.js";import"../services.min.js";const s="undefined"!=typeof self?self:globalThis;s.onmessage=i=>{const{ingredientTree:t,globalQty:o}=i.data||{},r=e({ingredientTree:t,globalQty:o});s.postMessage(r)};
