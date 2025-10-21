@@ -1,4 +1,4 @@
-import { CraftIngredient } from '../items-core.js';
+import { CraftIngredient, restoreCraftIngredientPrototypes } from '../items-core.js';
 
 function ensureNumber(value, fallback = 0) {
   if (value == null) return fallback;
@@ -6,8 +6,21 @@ function ensureNumber(value, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
+function isPrehydrated(node) {
+  return (
+    node &&
+    typeof node === 'object' &&
+    node.__hydrated === true &&
+    typeof node._uid === 'number'
+  );
+}
+
 export function hydrateAggregateTree(tree) {
   if (!tree) return null;
+  if (isPrehydrated(tree)) {
+    restoreCraftIngredientPrototypes([tree], null);
+    return tree;
+  }
   return hydrateNode(tree, null);
 }
 

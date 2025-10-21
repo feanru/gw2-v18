@@ -4,6 +4,11 @@ const { randomBytes } = require('crypto');
 const path = require('path');
 const { Worker } = require('worker_threads');
 const snapshotCache = require('../utils/snapshotCache');
+const {
+  getPrecomputedAggregate,
+  DEFAULT_SOFT_TTL_SECONDS: PRECOMPUTED_SOFT_TTL,
+  DEFAULT_HARD_TTL_SECONDS: PRECOMPUTED_HARD_TTL,
+} = require('../utils/precomputedAggregates');
 
 const DEFAULT_LANG = (process.env.DEFAULT_LANG || 'es').trim() || 'es';
 const FALLBACK_LANGS = Array.from(new Set(
@@ -32,6 +37,9 @@ const LOCK_PREFIX = 'agg:lock';
 const LOCK_TTL_MS = MAX_AGGREGATION_MS + 1000;
 const LOCK_WAIT_TIMEOUT_MS = MAX_AGGREGATION_MS * 2;
 const LOCK_POLL_INTERVAL_MS = 150;
+
+const PRECOMPUTED_SOFT_TTL_MS = (Number.isFinite(PRECOMPUTED_SOFT_TTL) ? PRECOMPUTED_SOFT_TTL : SOFT_TTL_SECONDS) * 1000;
+const PRECOMPUTED_HARD_TTL_MS = (Number.isFinite(PRECOMPUTED_HARD_TTL) ? PRECOMPUTED_HARD_TTL : HARD_TTL_SECONDS) * 1000;
 
 const WORKER_SCRIPT = path.resolve(__dirname, 'buildWorker.js');
 const inFlightBuilds = new Map();
@@ -150,13 +158,90 @@ async function getRedisClient() {
   return snapshotCache.getClient();
 }
 
-async function readSnapshot(itemId, lang) {
+async function readSnapshotEntry(itemId, lang) {
   const key = cacheKey(itemId, lang);
   const cached = await snapshotCache.get(key, {
     softTtlSeconds: SOFT_TTL_SECONDS,
     hardTtlSeconds: CACHE_TTL_SECONDS,
   });
-  return cached ? cached.value : null;
+  if (!cached || !cached.value) {
+    return null;
+  }
+  const payload = cached.value;
+  if (payload?.meta && Object.prototype.hasOwnProperty.call(payload.meta, 'precomputed')) {
+    payload.meta.precomputed = Boolean(payload.meta.precomputed);
+  }
+  return {
+    payload,
+    stale: Boolean(cached.stale),
+    metadata: cached.metadata || null,
+  };
+}
+
+async function readSnapshot(itemId, lang) {
+  const entry = await readSnapshotEntry(itemId, lang);
+  return entry ? entry.payload : null;
+}
+
+function markMetaPrecomputed(meta) {
+  if (!meta || typeof meta !== 'object') {
+    return { precomputed: true };
+  }
+  if (meta.precomputed !== true) {
+    meta.precomputed = Boolean(meta.precomputed);
+    if (!meta.precomputed) {
+      meta.precomputed = true;
+    }
+  }
+  return meta;
+}
+
+async function reuseFreshPrecomputedSnapshot(itemId, lang) {
+  const cachedEntry = await readSnapshotEntry(itemId, lang);
+  if (cachedEntry?.payload?.meta?.precomputed) {
+    const meta = cachedEntry.payload.meta;
+    const stale = Boolean(cachedEntry.stale) || isExpired(meta);
+    meta.stale = Boolean(meta.stale) || stale;
+    meta.precomputed = true;
+    if (!stale) {
+      return cachedEntry.payload;
+    }
+  }
+
+  try {
+    const mongoEntry = await getPrecomputedAggregate({ itemId, lang });
+    if (mongoEntry?.payload && mongoEntry.expired !== true) {
+      const payload = mongoEntry.payload;
+      const meta = markMetaPrecomputed(payload.meta);
+      payload.meta = meta;
+      const stale = Boolean(mongoEntry.stale) || isExpired(meta);
+      meta.stale = Boolean(meta.stale) || stale;
+      if (!stale) {
+        try {
+          await snapshotCache.set(cacheKey(itemId, lang), payload, {
+            softTtlMs: PRECOMPUTED_SOFT_TTL_MS,
+            hardTtlMs: PRECOMPUTED_HARD_TTL_MS,
+            tags: [`item:${itemId}`, `lang:${lang}`, 'precomputed'],
+          });
+        } catch (cacheErr) {
+          if (process.env.NODE_ENV !== 'test') {
+            console.warn(
+              `[aggregate] failed to propagate precomputed snapshot for ${itemId}/${lang}: ${cacheErr.message}`,
+            );
+          }
+        }
+        return payload;
+      }
+    }
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        `[aggregate] unable to read precomputed snapshot for ${itemId}/${lang}: ${err.message}`,
+      );
+    }
+  }
+
+  return null;
 }
 
 async function writeSnapshot(itemId, lang, payload) {
@@ -229,9 +314,9 @@ async function acquireLockOrReuseSnapshot(redis, itemId, lang) {
     }
 
     if (!exists) {
-      const cached = await readSnapshot(itemId, lang);
-      if (cached) {
-        return { payload: cached };
+      const cached = await readSnapshotEntry(itemId, lang);
+      if (cached?.payload) {
+        return { payload: cached.payload };
       }
       try {
         const acquired = await tryAcquireRedisLock(redis, key, token, LOCK_TTL_MS);
@@ -370,7 +455,7 @@ async function executeBuild(itemId, lang) {
   });
 }
 
-function ensureBuild(itemId, lang) {
+function ensureBuild(itemId, lang, options = {}) {
   const normalizedLang = (lang || DEFAULT_LANG).trim() || DEFAULT_LANG;
   const normalizedId = Number(itemId);
   if (!Number.isFinite(normalizedId) || normalizedId <= 0) {
@@ -381,6 +466,13 @@ function ensureBuild(itemId, lang) {
     return inFlightBuilds.get(key);
   }
   const promise = (async () => {
+    const forceRebuild = Boolean(options && options.forceRebuild);
+    if (!forceRebuild) {
+      const precomputed = await reuseFreshPrecomputedSnapshot(normalizedId, normalizedLang);
+      if (precomputed) {
+        return precomputed;
+      }
+    }
     const redis = await getRedisClient();
     let lockToken = null;
     if (redis) {
@@ -438,11 +530,8 @@ async function getCachedAggregate(itemId, lang) {
     return null;
   }
   const key = cacheKey(normalizedId, normalizedLang);
-  const cacheEntry = await snapshotCache.get(key, {
-    softTtlSeconds: SOFT_TTL_SECONDS,
-    hardTtlSeconds: CACHE_TTL_SECONDS,
-  });
-  const payload = cacheEntry ? cacheEntry.value : null;
+  const cacheEntry = await readSnapshotEntry(normalizedId, normalizedLang);
+  const payload = cacheEntry ? cacheEntry.payload : null;
   if (!payload) {
     return null;
   }
@@ -456,6 +545,9 @@ async function getCachedAggregate(itemId, lang) {
   meta.snapshotAt = snapshotAt;
   const staleFromCache = cacheEntry ? Boolean(cacheEntry.stale) : false;
   meta.stale = Boolean(meta.stale) || staleFromCache || isExpired(meta);
+  if (Object.prototype.hasOwnProperty.call(payload.meta || {}, 'precomputed')) {
+    meta.precomputed = Boolean(payload.meta.precomputed);
+  }
   meta.warnings = Array.isArray(payload.meta?.warnings)
     ? [...payload.meta.warnings]
     : [];
@@ -487,4 +579,6 @@ module.exports = {
   DEFAULT_LANG,
   FALLBACK_LANGS,
   MAX_AGGREGATION_MS,
+  SOFT_TTL_SECONDS,
+  HARD_TTL_SECONDS,
 };

@@ -5,6 +5,7 @@ const updateItems = require('./updateItems');
 const updatePrices = require('./updatePrices');
 const updateRecipes = require('./updateRecipes');
 const buildRecipeTrees = require('./buildRecipeTrees');
+const buildAggregates = require('./buildAggregates');
 const cleanupSnapshots = require('./cleanupSnapshots');
 const { buildSyncHealthPayload } = require('./healthSummary');
 const {
@@ -19,6 +20,7 @@ const CACHE_TTL_FAST = Number(process.env.CACHE_TTL_FAST || 120);
 const CACHE_TTL_SLOW = Number(process.env.CACHE_TTL_SLOW || 1800);
 const RECIPE_TREE_INTERVAL = Number(process.env.RECIPE_TREE_INTERVAL || 3600);
 const SNAPSHOT_CLEANUP_INTERVAL = Number(process.env.SNAPSHOT_CLEANUP_INTERVAL || 6 * 3600);
+const PRECOMPUTED_AGGREGATE_INTERVAL = Number(process.env.PRECOMPUTED_AGGREGATE_INTERVAL || 3 * 3600);
 const MIN_INTERVAL_SECONDS = 30;
 
 log('scheduler started');
@@ -218,6 +220,7 @@ const JOB_RETRY_OPTIONS = {
   updatePrices: { maxAttempts: 5, initialDelayMs: 500 },
   buildRecipeTrees: { maxAttempts: 3, initialDelayMs: 1500 },
   cleanupSnapshots: { maxAttempts: 3, initialDelayMs: 2000 },
+  buildAggregates: { maxAttempts: 3, initialDelayMs: 2000 },
 };
 
 function scheduleJob(name, intervalSeconds, jobFn, computeIntervalFn, options = {}) {
@@ -313,6 +316,9 @@ scheduleJob('updatePrices', CACHE_TTL_FAST, updatePrices, (base) => computeColle
 });
 scheduleJob('buildRecipeTrees', RECIPE_TREE_INTERVAL, buildRecipeTrees, (base) => computeRecipeTreeInterval(base), {
   retry: JOB_RETRY_OPTIONS.buildRecipeTrees,
+});
+scheduleJob('buildAggregates', PRECOMPUTED_AGGREGATE_INTERVAL, buildAggregates, undefined, {
+  retry: JOB_RETRY_OPTIONS.buildAggregates,
 });
 scheduleJob('cleanupSnapshots', SNAPSHOT_CLEANUP_INTERVAL, cleanupSnapshots, undefined, {
   retry: JOB_RETRY_OPTIONS.cleanupSnapshots,
