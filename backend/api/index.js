@@ -9,6 +9,7 @@ const { createClient } = require('redis');
 const snapshotCache = require('../utils/snapshotCache');
 const aggregateModule = require('../aggregates/buildItemAggregate');
 const aggregateHelpers = require('./aggregate');
+const metricsModule = require('./metrics');
 const { createLegacyRouter } = require('./legacy');
 const legacyHandlersModule = require('./legacy/handlers');
 const { createLegacyHandlers } = legacyHandlersModule;
@@ -129,6 +130,10 @@ let redisClient = null;
 const alertNotificationState = new Map();
 let dashboardRefreshPromise = null;
 let operationalAlertDispatcher = null;
+const metricsHandler = metricsModule.createMetricsHandler({
+  buildDashboardSnapshot,
+  getRedisClient,
+});
 
 function normalizeLang(lang) {
   if (!lang) {
@@ -375,6 +380,189 @@ function attachResponseMetricsHooks(res) {
     updateBytesFromChunk(chunk, encoding);
     return originalEnd.call(this, chunk, encoding, cb);
   };
+}
+
+function attachTraceIdMiddleware(res) {
+  if (!res || typeof res !== 'object') {
+    return;
+  }
+  const context = getResponseContext(res);
+  if (!context || typeof context !== 'object') {
+    return;
+  }
+  if (!context.traceId) {
+    context.traceId = generateTraceId();
+  }
+  const traceId = context.traceId;
+  const nativeSetHeader = typeof res.setHeader === 'function' ? res.setHeader.bind(res) : null;
+  const nativeWriteHead = typeof res.writeHead === 'function' ? res.writeHead.bind(res) : null;
+  const nativeEnd = typeof res.end === 'function' ? res.end.bind(res) : null;
+  const nativeRemoveHeader = typeof res.removeHeader === 'function' ? res.removeHeader.bind(res) : null;
+  const nativeGetHeader = typeof res.getHeader === 'function' ? res.getHeader.bind(res) : null;
+
+  if (!nativeWriteHead || !nativeEnd) {
+    return;
+  }
+
+  let contentType = null;
+  let isJsonResponse = false;
+
+  const ensureTraceHeader = () => {
+    if (nativeSetHeader) {
+      nativeSetHeader('X-Trace-Id', traceId);
+    }
+  };
+
+  const trackContentType = (value) => {
+    if (value == null) {
+      return;
+    }
+    const candidate = Array.isArray(value) ? value[0] : value;
+    if (typeof candidate !== 'string') {
+      return;
+    }
+    contentType = candidate;
+    if (isJsonContentType(candidate)) {
+      isJsonResponse = true;
+      if (nativeRemoveHeader) {
+        nativeRemoveHeader('Content-Length');
+      }
+    }
+  };
+
+  if (nativeSetHeader) {
+    res.setHeader = function setHeaderWithTrace(name, value) {
+      if (typeof name === 'string') {
+        const lower = name.toLowerCase();
+        if (lower === 'content-type') {
+          trackContentType(value);
+        } else if (lower === 'x-trace-id' && (value == null || value === '')) {
+          value = traceId;
+        }
+      }
+      return nativeSetHeader(name, value);
+    };
+  }
+
+  res.writeHead = function writeHeadWithTrace(statusCode, arg1, arg2) {
+    let headers = arg1;
+    let statusMessage = null;
+    if (typeof arg1 === 'string') {
+      statusMessage = arg1;
+      headers = arg2;
+    }
+
+    const normalizeArrayHeaders = (list) => {
+      const normalized = [];
+      let hasTraceHeader = false;
+      for (const entry of list || []) {
+        if (!entry) {
+          continue;
+        }
+        const [name, value] = entry;
+        if (typeof name !== 'string') {
+          normalized.push(entry);
+          continue;
+        }
+        const lower = name.toLowerCase();
+        if (lower === 'content-type') {
+          trackContentType(value);
+          normalized.push([name, value]);
+          continue;
+        }
+        if (lower === 'content-length' && isJsonResponse) {
+          continue;
+        }
+        if (lower === 'x-trace-id') {
+          hasTraceHeader = true;
+          normalized.push([name, traceId]);
+          continue;
+        }
+        normalized.push(entry);
+      }
+      if (!hasTraceHeader) {
+        normalized.push(['X-Trace-Id', traceId]);
+      }
+      return normalized;
+    };
+
+    if (headers && typeof headers === 'object') {
+      if (Array.isArray(headers)) {
+        headers = normalizeArrayHeaders(headers);
+      } else {
+        const candidate = headers['Content-Type'] ?? headers['content-type'];
+        if (candidate) {
+          trackContentType(candidate);
+        }
+        headers['X-Trace-Id'] = traceId;
+        if (isJsonResponse) {
+          delete headers['Content-Length'];
+          delete headers['content-length'];
+        }
+      }
+    } else {
+      ensureTraceHeader();
+    }
+
+    if (isJsonResponse && nativeRemoveHeader) {
+      nativeRemoveHeader('Content-Length');
+    }
+    ensureTraceHeader();
+
+    if (statusMessage != null) {
+      return nativeWriteHead.call(this, statusCode, statusMessage, headers);
+    }
+    return nativeWriteHead.call(this, statusCode, headers);
+  };
+
+  res.end = function endWithTrace(chunk, encoding, cb) {
+    ensureTraceHeader();
+    const resolvedType =
+      contentType ||
+      (nativeGetHeader && (nativeGetHeader('content-type') || nativeGetHeader('Content-Type'))) ||
+      null;
+    const shouldProcess = isJsonResponse || isJsonContentType(resolvedType);
+    let finalChunk = chunk;
+    let finalEncoding = encoding;
+
+    if (shouldProcess) {
+      if (nativeRemoveHeader) {
+        nativeRemoveHeader('Content-Length');
+      }
+      let text = null;
+      if (Buffer.isBuffer(chunk)) {
+        text = chunk.toString(typeof encoding === 'string' ? encoding : 'utf8');
+        finalEncoding = 'utf8';
+      } else if (typeof chunk === 'string') {
+        text = chunk;
+      }
+      if (text && text.trim()) {
+        try {
+          const payload = JSON.parse(text);
+          if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+            const metaSource =
+              payload.meta && typeof payload.meta === 'object' && !Array.isArray(payload.meta)
+                ? payload.meta
+                : {};
+            const traceValue = context.traceId || traceId;
+            if (!metaSource.traceId || metaSource.traceId !== traceValue) {
+              const enrichedMeta = { ...metaSource, traceId: traceValue };
+              payload.meta = enrichedMeta;
+              const serialized = JSON.stringify(payload);
+              finalChunk = serialized;
+              finalEncoding = 'utf8';
+            }
+          }
+        } catch (err) {
+          // Ignore JSON parse errors
+        }
+      }
+    }
+
+    return nativeEnd.call(this, finalChunk, finalEncoding, cb);
+  };
+
+  ensureTraceHeader();
 }
 
 function isJsonContentType(value) {
@@ -4091,6 +4279,20 @@ async function handleApiRequest(req, res) {
     return;
   }
 
+  if (pathname === '/metrics') {
+    if (method !== 'GET') {
+      res.writeHead(405, {
+        Allow: 'GET',
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      });
+      res.end('Method not allowed\n');
+      return;
+    }
+    await metricsHandler(req, res);
+    return;
+  }
+
   if (pathname === '/api/healthz') {
     if (method !== 'GET') {
       fail(
@@ -4280,6 +4482,7 @@ function requestListener(req, res) {
   req[RESPONSE_CONTEXT_KEY] = context;
   res[RESPONSE_CONTEXT_KEY] = context;
 
+  attachTraceIdMiddleware(res);
   attachResponseMetricsHooks(res);
 
   const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET';
