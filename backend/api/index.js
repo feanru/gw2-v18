@@ -3416,7 +3416,7 @@ function mergeAggregateMeta(cachedMeta, overrides = {}) {
   return { meta, errors };
 }
 
-async function handleGetAggregate(req, res, itemId, lang, url) {
+async function handleGetAggregate(req, res, itemId, lang, url, langHints = []) {
   const start = process.hrtime.bigint();
   let statusCode = 200;
   let stale = false;
@@ -3430,10 +3430,21 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
   let snapshotTtlMs = null;
   let cacheAgeMs = null;
   let cacheStoredAt = null;
+  const requestedLang = normalizeLang(lang);
+  const candidateLangs = buildCandidateLangs(requestedLang, langHints);
+  const langSequence = candidateLangs.length > 0 ? candidateLangs : [requestedLang];
+  let activeLang = langSequence[0];
   const fields = aggregateHelpers.parseAggregateFields(url?.searchParams?.get('fields'));
   try {
     const cacheLookupStart = process.hrtime.bigint();
-    cached = await getCachedAggregateFn(itemId, lang);
+    for (const candidate of langSequence) {
+      activeLang = candidate;
+      cached = await getCachedAggregateFn(itemId, candidate);
+      if (cached && cached.data) {
+        break;
+      }
+      cached = null;
+    }
     cacheLookupMs = Number(process.hrtime.bigint() - cacheLookupStart) / 1e6;
     if (!Number.isFinite(cacheLookupMs) || cacheLookupMs < 0) {
       cacheLookupMs = null;
@@ -3448,9 +3459,11 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       }
       const expired = isAggregateExpiredFn(cached.meta);
       if (expired) {
-        scheduleAggregateBuildFn(itemId, lang).catch((err) => {
+        scheduleAggregateBuildFn(itemId, activeLang).catch((err) => {
           if (process.env.NODE_ENV !== 'test') {
-            console.warn(`[api] aggregate rebuild failed for ${itemId}/${lang}: ${err.message}`);
+            console.warn(
+              `[api] aggregate rebuild failed for ${itemId}/${activeLang}: ${err.message}`,
+            );
           }
         });
       }
@@ -3459,16 +3472,21 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       cacheStale = cacheStale || stale;
       source = cached.meta?.source || 'aggregate';
       const { meta, errors } = mergeAggregateMeta(cached.meta, {
-        lang,
-        requestedLang: lang,
+        lang: activeLang,
+        requestedLang,
         itemId,
         source: 'aggregate',
         stale,
       });
-      const { headers, snapshotIso, snapshotId, ttlMs } = computeConditionalHeaders(meta, itemId, lang, {
-        cache: cacheMetadata,
-        stale,
-      });
+      const { headers, snapshotIso, snapshotId, ttlMs } = computeConditionalHeaders(
+        meta,
+        itemId,
+        activeLang,
+        {
+          cache: cacheMetadata,
+          stale,
+        },
+      );
       if (!snapshotIdForMetrics) {
         snapshotIdForMetrics = snapshotId || resolveSnapshotId(meta);
       }
@@ -3492,49 +3510,71 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       return;
     }
 
-    const buildPromise = buildItemAggregateFn(itemId, lang);
-    scheduleAggregateBuildFn(itemId, lang).catch((err) => {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn(`[api] aggregate build failed for ${itemId}/${lang}: ${err.message}`);
-      }
-    });
-
     const maxBuildMs = Number(aggregateModule.MAX_AGGREGATION_MS);
     let timeoutId = null;
     let built = null;
-    try {
-      if (Number.isFinite(maxBuildMs) && maxBuildMs > 0) {
-        built = await Promise.race([
-          buildPromise,
-          new Promise((_, reject) => {
-            timeoutId = setTimeout(() => {
-              reject(new Error('Aggregate build timeout'));
-            }, maxBuildMs);
-          }),
-        ]);
-      } else {
-        built = await buildPromise;
+    for (let i = 0; i < langSequence.length; i += 1) {
+      const candidate = langSequence[i];
+      activeLang = candidate;
+      const buildPromise = buildItemAggregateFn(itemId, candidate);
+      scheduleAggregateBuildFn(itemId, candidate).catch((err) => {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(
+            `[api] aggregate build failed for ${itemId}/${candidate}: ${err.message}`,
+          );
+        }
+      });
+
+      timeoutId = null;
+      try {
+        if (Number.isFinite(maxBuildMs) && maxBuildMs > 0) {
+          built = await Promise.race([
+            buildPromise,
+            new Promise((_, reject) => {
+              timeoutId = setTimeout(() => {
+                reject(new Error('Aggregate build timeout'));
+              }, maxBuildMs);
+            }),
+          ]);
+        } else {
+          built = await buildPromise;
+        }
+      } catch (err) {
+        built = null;
+        if (i === langSequence.length - 1) {
+          throw err;
+        }
+      } finally {
+        if (timeoutId != null) {
+          clearTimeout(timeoutId);
+        }
       }
-    } finally {
-      if (timeoutId != null) {
-        clearTimeout(timeoutId);
+
+      if (built && built.data) {
+        break;
       }
+      built = null;
     }
 
     if (built && built.data) {
       stale = false;
       source = 'aggregate';
       const { meta, errors } = mergeAggregateMeta(built.meta, {
-        lang,
-        requestedLang: lang,
+        lang: activeLang,
+        requestedLang,
         itemId,
         source: 'aggregate',
         stale: false,
       });
-      const { headers, snapshotIso, snapshotId, ttlMs } = computeConditionalHeaders(meta, itemId, lang, {
-        cache: null,
-        stale: false,
-      });
+      const { headers, snapshotIso, snapshotId, ttlMs } = computeConditionalHeaders(
+        meta,
+        itemId,
+        activeLang,
+        {
+          cache: null,
+          stale: false,
+        },
+      );
       if (!snapshotIdForMetrics) {
         snapshotIdForMetrics = snapshotId || resolveSnapshotId(meta);
       }
@@ -3560,19 +3600,34 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
 
     stale = false;
     statusCode = 200;
+    const notFoundMeta = {
+      lang: requestedLang || activeLang,
+      itemId,
+      source: 'aggregate',
+      stale: false,
+      lastUpdated: null,
+    };
+    if (requestedLang) {
+      notFoundMeta.requestedLang = requestedLang;
+      if (activeLang && requestedLang !== activeLang) {
+        notFoundMeta.warnings = [`lang-fallback:${activeLang}`];
+      }
+    }
     ok(
       res,
       null,
-      { lang, itemId, source: 'aggregate', stale: false, lastUpdated: null },
+      notFoundMeta,
       {
         errors: [{ code: 'not_found', msg: 'Aggregate snapshot not available' }],
       },
     );
   } catch (err) {
     if (process.env.NODE_ENV !== 'test') {
-      console.error(`[api] unable to retrieve aggregate for ${itemId}/${lang}: ${err.message}`);
+      console.error(
+        `[api] unable to retrieve aggregate for ${itemId}/${activeLang}: ${err.message}`,
+      );
     }
-    scheduleAggregateBuildFn(itemId, lang).catch(() => {});
+    scheduleAggregateBuildFn(itemId, activeLang).catch(() => {});
     if (cached && cached.data) {
       stale = true;
       source = cached.meta?.source || 'aggregate';
@@ -3580,15 +3635,15 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       const fallbackSnapshotAt =
         cached.meta?.snapshotAt ?? cached.meta?.generatedAt ?? cached.meta?.lastUpdated ?? null;
       const { meta, errors } = mergeAggregateMeta(cached.meta, {
-        lang,
-        requestedLang: lang,
+        lang: activeLang,
+        requestedLang,
         itemId,
         source: 'aggregate',
         stale: true,
         snapshotAt: fallbackSnapshotAt,
         errors: ['aggregateFallback'],
       });
-      const { headers, snapshotId, ttlMs } = computeConditionalHeaders(meta, itemId, lang, {
+      const { headers, snapshotId, ttlMs } = computeConditionalHeaders(meta, itemId, activeLang, {
         cache: cacheMetadata,
         stale: true,
       });
@@ -3605,10 +3660,23 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
     } else {
       stale = false;
       statusCode = 200;
+      const failedMeta = {
+        lang: requestedLang || activeLang,
+        itemId,
+        source: 'aggregate',
+        stale: false,
+        lastUpdated: null,
+      };
+      if (requestedLang) {
+        failedMeta.requestedLang = requestedLang;
+        if (activeLang && requestedLang !== activeLang) {
+          failedMeta.warnings = [`lang-fallback:${activeLang}`];
+        }
+      }
       ok(
         res,
         null,
-        { lang, itemId, source: 'aggregate', stale: false, lastUpdated: null },
+        failedMeta,
         {
           errors: [
             { code: 'aggregate_failed', msg: 'Aggregate snapshot not available' },
@@ -3631,7 +3699,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       snapshotId: snapshotIdForMetrics,
       snapshotTtlMs,
       itemId: Number(itemId),
-      lang: normalizeLang(lang),
+      lang: normalizeLang(activeLang),
       cacheAgeMs,
       cacheStoredAt,
       ttfbMs: responseContext && Number.isFinite(responseContext.ttfbMs)
@@ -3644,7 +3712,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
   }
 }
 
-async function handleGetItemBundle(req, res, url, lang) {
+async function handleGetItemBundle(req, res, url, lang, langHints = []) {
   const ids = parseNumericParamList(url.searchParams, 'ids');
   if (ids.length === 0) {
     fail(
@@ -3653,7 +3721,7 @@ async function handleGetItemBundle(req, res, url, lang) {
       'ids_required',
       'ids required',
       {
-        lang,
+        lang: normalizeLang(lang),
         source: 'aggregate',
         stale: false,
       },
@@ -3661,27 +3729,51 @@ async function handleGetItemBundle(req, res, url, lang) {
     return;
   }
 
-  const aggregateResult = await aggregateHelpers.resolveAggregateEntries(ids, {
-    lang,
-    getCachedAggregate: getCachedAggregateFn,
-    buildItemAggregate: buildItemAggregateFn,
-    logger: console,
-  });
+  const candidateLangs = buildCandidateLangs(lang, langHints);
+  let aggregateResult = null;
+  let effectiveLang = null;
+  for (const candidate of candidateLangs) {
+    const attempt = await aggregateHelpers.resolveAggregateEntries(ids, {
+      lang: candidate,
+      getCachedAggregate: getCachedAggregateFn,
+      buildItemAggregate: buildItemAggregateFn,
+      logger: console,
+    });
+    if (!aggregateResult) {
+      aggregateResult = attempt;
+      effectiveLang = candidate;
+    }
+    if (attempt && attempt.resolved) {
+      aggregateResult = attempt;
+      effectiveLang = candidate;
+      break;
+    }
+  }
 
-  if (aggregateResult.resolved) {
+  const requestedLang = normalizeLang(lang);
+  const resolvedLang = normalizeLang(effectiveLang || lang);
+
+  if (aggregateResult && aggregateResult.resolved) {
     const normalizedIds = aggregateResult.ids;
     const { items, market } = aggregateHelpers.buildBundleFromEntries(
       normalizedIds,
       aggregateResult.entries,
     );
+    const warnings = Array.from(aggregateResult.warnings || []);
+    if (requestedLang && resolvedLang && requestedLang !== resolvedLang) {
+      warnings.push(`lang-fallback:${resolvedLang}`);
+    }
     const { meta, errors: errorsList } = aggregateHelpers.buildAggregateMeta({
-      lang,
+      lang: resolvedLang,
       source: 'aggregate',
       stale: aggregateResult.stale,
-      warnings: aggregateResult.warnings,
+      warnings,
       errors: aggregateResult.errors,
       snapshot: aggregateResult.snapshot,
     });
+    if (requestedLang) {
+      meta.requestedLang = requestedLang;
+    }
 
     ok(
       res,
@@ -3699,7 +3791,7 @@ async function handleGetItemBundle(req, res, url, lang) {
 
   if (process.env.NODE_ENV !== 'test') {
     console.warn(
-      `[api] falling back to legacy bundle handler for ids ${ids.join(',')} (${lang})`,
+      `[api] falling back to legacy bundle handler for ids ${ids.join(',')} (${resolvedLang})`,
     );
   }
 
@@ -3799,11 +3891,11 @@ async function handleGetItemBundle(req, res, url, lang) {
   };
 
   try {
-    await legacyBundleHandler(req, res, {
-      url,
-      lang,
-      method: 'GET',
-    });
+  await legacyBundleHandler(req, res, {
+    url,
+    lang: resolvedLang,
+    method: 'GET',
+  });
   } finally {
     res.writeHead = originalWriteHead;
     res.end = originalEnd;
@@ -3896,10 +3988,11 @@ async function fetchLegacyBundlePayload(ids, lang) {
   };
 }
 
-async function handleAggregateBundleJson(req, res, url, lang) {
+async function handleAggregateBundleJson(req, res, url, lang, langHints = []) {
   const ids = parseNumericParamList(url.searchParams, 'ids');
   if (ids.length === 0) {
-    const meta = { lang, source: 'aggregate', stale: false };
+    const normalizedRequested = normalizeLang(lang);
+    const meta = { lang: normalizedRequested, source: 'aggregate', stale: false };
     const payload = {
       priceMap: {},
       iconMap: {},
@@ -3923,7 +4016,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
 
   if (pagedIds.length === 0) {
     const { meta } = aggregateHelpers.buildAggregateMeta({
-      lang,
+      lang: normalizeLang(lang),
       source: 'aggregate',
       stale: false,
     });
@@ -3940,12 +4033,49 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     return;
   }
 
-  const aggregateResult = await aggregateHelpers.resolveAggregateEntries(pagedIds, {
-    lang,
-    getCachedAggregate: getCachedAggregateFn,
-    buildItemAggregate: buildItemAggregateFn,
-    logger: console,
-  });
+  const candidateLangs = buildCandidateLangs(lang, langHints);
+  let aggregateResult = null;
+  let effectiveLang = null;
+  for (const candidate of candidateLangs) {
+    const attempt = await aggregateHelpers.resolveAggregateEntries(pagedIds, {
+      lang: candidate,
+      getCachedAggregate: getCachedAggregateFn,
+      buildItemAggregate: buildItemAggregateFn,
+      logger: console,
+    });
+    if (!aggregateResult) {
+      aggregateResult = attempt;
+      effectiveLang = candidate;
+    }
+    if (attempt && attempt.resolved) {
+      aggregateResult = attempt;
+      effectiveLang = candidate;
+      break;
+    }
+  }
+
+  if (!aggregateResult) {
+    const normalizedRequested = normalizeLang(lang);
+    const meta = { lang: normalizedRequested, source: 'aggregate', stale: true, pagination };
+    const payload = aggregateHelpers.filterAggregateBundlePayload(
+      {
+        priceMap: {},
+        iconMap: {},
+        rarityMap: {},
+        meta,
+        errors: [
+          { code: 'aggregate_failed', msg: 'Aggregate snapshot not available' },
+        ],
+      },
+      fields,
+    );
+    sendAggregateBundleResponse(res, payload, {
+      statusCode: 502,
+      cacheControl: 'no-store, no-cache, must-revalidate',
+      dataSource: meta.source,
+    });
+    return;
+  }
 
   if (aggregateResult.resolved) {
     const normalizedIds = aggregateResult.ids;
@@ -3953,14 +4083,23 @@ async function handleAggregateBundleJson(req, res, url, lang) {
       normalizedIds,
       aggregateResult.entries,
     );
+    const normalizedRequested = normalizeLang(lang);
+    const normalizedEffective = normalizeLang(effectiveLang || lang);
+    const warnings = Array.from(aggregateResult.warnings || []);
+    if (normalizedRequested && normalizedEffective && normalizedRequested !== normalizedEffective) {
+      warnings.push(`lang-fallback:${normalizedEffective}`);
+    }
     const { meta, errors } = aggregateHelpers.buildAggregateMeta({
-      lang,
+      lang: normalizedEffective,
       source: 'aggregate',
       stale: aggregateResult.stale,
-      warnings: aggregateResult.warnings,
+      warnings,
       errors: aggregateResult.errors,
       snapshot: aggregateResult.snapshot,
     });
+    if (normalizedRequested) {
+      meta.requestedLang = normalizedRequested;
+    }
     const enrichedMeta = { ...meta, pagination };
     const payload = aggregateHelpers.filterAggregateBundlePayload(
       { priceMap, iconMap, rarityMap, meta: enrichedMeta },
@@ -3977,11 +4116,45 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     return;
   }
 
-  const fallbackResult = await fetchLegacyBundlePayload(pagedIds, lang);
-  const fallbackPayload = fallbackResult.payload;
+  const normalizedRequested = normalizeLang(lang);
+  let fallbackResult = null;
+  let fallbackPayload = null;
+  let fallbackLang = null;
+  for (const candidate of candidateLangs) {
+    const attempt = await fetchLegacyBundlePayload(pagedIds, candidate);
+    if (!fallbackResult) {
+      fallbackResult = attempt;
+      fallbackPayload = attempt.payload;
+      fallbackLang = candidate;
+    }
+    const statusCode = attempt.statusCode ?? 200;
+    if (attempt.payload && statusCode < 400) {
+      fallbackResult = attempt;
+      fallbackPayload = attempt.payload;
+      fallbackLang = candidate;
+      break;
+    }
+  }
+
+  const normalizedFallbackLang = normalizeLang(fallbackLang || lang);
 
   if (!fallbackPayload || fallbackResult.statusCode >= 400) {
-    const meta = { lang, source: 'aggregate', stale: true, pagination };
+    const metaWarnings = [];
+    if (normalizedRequested && normalizedFallbackLang && normalizedRequested !== normalizedFallbackLang) {
+      metaWarnings.push(`lang-fallback:${normalizedFallbackLang}`);
+    }
+    const meta = {
+      lang: normalizedFallbackLang,
+      source: 'aggregate',
+      stale: true,
+      pagination,
+    };
+    if (normalizedRequested) {
+      meta.requestedLang = normalizedRequested;
+    }
+    if (metaWarnings.length > 0) {
+      meta.warnings = metaWarnings;
+    }
     const payload = aggregateHelpers.filterAggregateBundlePayload(
       {
         priceMap: {},
@@ -4014,13 +4187,23 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     fallbackEntries,
   );
   const { meta, errors } = aggregateHelpers.buildAggregateMeta({
-    lang,
+    lang: normalizedFallbackLang,
     source: 'fallback',
     stale: fallbackMeta.stale,
     warnings: fallbackMeta.warnings,
     errors: fallbackPayload.errors,
     snapshot: snapshotValue,
   });
+  if (normalizedRequested) {
+    meta.requestedLang = normalizedRequested;
+  }
+  const warningSet = new Set(Array.isArray(meta.warnings) ? meta.warnings : []);
+  if (normalizedRequested && normalizedFallbackLang && normalizedRequested !== normalizedFallbackLang) {
+    warningSet.add(`lang-fallback:${normalizedFallbackLang}`);
+  }
+  if (warningSet.size > 0) {
+    meta.warnings = Array.from(warningSet);
+  }
   const enrichedMeta = { ...meta, pagination };
   const payload = aggregateHelpers.filterAggregateBundlePayload(
     { priceMap, iconMap, rarityMap, meta: enrichedMeta },
@@ -4150,7 +4333,7 @@ async function handleApiRequest(req, res) {
   }
 
   if (pathname === '/api/aggregate/bundle') {
-    await handleAggregateBundleJson(req, res, url, lang);
+    await handleAggregateBundleJson(req, res, url, lang, langHints);
     return;
   }
 
@@ -4159,7 +4342,7 @@ async function handleApiRequest(req, res) {
   }
 
   if (pathname === '/api/items/bundle') {
-    await handleGetItemBundle(req, res, url, lang);
+    await handleGetItemBundle(req, res, url, lang, langHints);
     return;
   }
 
@@ -4176,7 +4359,7 @@ async function handleApiRequest(req, res) {
       );
       return;
     }
-    await handleGetAggregate(req, res, itemId, lang, url);
+    await handleGetAggregate(req, res, itemId, lang, url, langHints);
     return;
   }
 
