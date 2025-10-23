@@ -5,35 +5,69 @@ function normalizeErrors(errors) {
   return Array.isArray(errors) ? errors : [errors];
 }
 
+function extractTraceId(meta, payload) {
+  if (meta && typeof meta.traceId === 'string' && meta.traceId) {
+    return meta.traceId;
+  }
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    if (typeof payload.traceId === 'string' && payload.traceId) {
+      return payload.traceId;
+    }
+    const candidate = payload.meta && typeof payload.meta === 'object' ? payload.meta.traceId : null;
+    if (typeof candidate === 'string' && candidate) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function withTrace(meta, payload) {
+  const base = meta && typeof meta === 'object' && !Array.isArray(meta) ? { ...meta } : { errors: [] };
+  if (!Array.isArray(base.errors)) {
+    base.errors = normalizeErrors(base.errors);
+  }
+  const traceId = extractTraceId(base, payload);
+  if (traceId) {
+    base.traceId = traceId;
+  } else if (!hasOwn.call(base, 'traceId')) {
+    base.traceId = null;
+  }
+  return base;
+}
+
+function finalizeResponse(data, meta, payload) {
+  return { data, meta: withTrace(meta, payload) };
+}
+
 export function normalizeApiResponse(payload) {
   if (payload == null) {
-    return { data: null, meta: { errors: [] } };
+    return finalizeResponse(null, { errors: [] }, payload);
   }
 
   if (typeof payload !== 'object' || payload instanceof Response) {
-    return { data: payload, meta: { errors: [] } };
+    return finalizeResponse(payload, { errors: [] }, payload);
   }
 
   if (Array.isArray(payload)) {
-    return { data: payload, meta: { errors: [] } };
+    return finalizeResponse(payload, { errors: [] }, payload);
   }
 
   if (hasOwn.call(payload, 'data')) {
     const meta = hasOwn.call(payload, 'meta') && typeof payload.meta === 'object'
       ? { ...payload.meta, errors: normalizeErrors(payload.meta?.errors) }
       : { errors: [] };
-    return { data: payload.data, meta };
+    return finalizeResponse(payload.data, meta, payload);
   }
 
   if (hasOwn.call(payload, 'meta')) {
     const meta = typeof payload.meta === 'object'
       ? { ...payload.meta, errors: normalizeErrors(payload.meta?.errors) }
       : { errors: [] };
-    return { data: null, meta };
+    return finalizeResponse(null, meta, payload);
   }
 
   const { errors, ...rest } = payload;
-  return { data: rest, meta: { errors: normalizeErrors(errors) } };
+  return finalizeResponse(rest, { errors: normalizeErrors(errors) }, payload);
 }
 
 export function unwrapApiResponse(payload) {
