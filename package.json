@@ -21,7 +21,8 @@
     "node-fetch": "^3.3.2",
     "redis": "^4.6.7",
     "recipe-calculation": "file:packages/recipe-calculation",
-    "recipe-nesting": "file:packages/recipe-nesting"
+    "recipe-nesting": "file:packages/recipe-nesting",
+    "web-vitals": "^4.0.1"
   },
   "devDependencies": {
     "rollup": "^4.16.0",

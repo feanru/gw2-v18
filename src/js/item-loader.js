@@ -15,6 +15,7 @@ import { fromEntry as priceEntryToSummary } from './adapters/priceAdapter.js';
 import { hydrateAggregateTree } from './utils/aggregateHydrator.js';
 import { renderFreshnessBanner, hideFreshnessBanner } from './utils/freshnessBanner.js';
 import { recordAggregateDuration, trackTelemetryEvent, now as telemetryNow } from './utils/telemetry.js';
+import './utils/registerWebVitals.js';
 
 let prepareIngredientTreeData,
   CraftIngredient,
