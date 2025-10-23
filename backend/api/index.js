@@ -408,8 +408,16 @@ function attachTraceIdMiddleware(res) {
   let isJsonResponse = false;
 
   const ensureTraceHeader = () => {
-    if (nativeSetHeader) {
+    if (!nativeSetHeader) {
+      return;
+    }
+    if (res.headersSent) {
+      return;
+    }
+    try {
       nativeSetHeader('X-Trace-Id', traceId);
+    } catch (err) {
+      // Ignore errors when headers are already sent.
     }
   };
 
