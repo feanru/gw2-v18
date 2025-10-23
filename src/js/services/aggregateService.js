@@ -107,6 +107,56 @@ function getHeader(response, name) {
   return null;
 }
 
+function sanitizeCanaryAssignments(assignments) {
+  if (!Array.isArray(assignments) || assignments.length === 0) {
+    return null;
+  }
+  const sanitized = assignments
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      return {
+        scope: entry.scope ?? null,
+        bucket: entry.bucket ?? null,
+        assignedAt: entry.assignedAt ?? null,
+        expiresAt: entry.expiresAt ?? null,
+        source: entry.source ?? null,
+        feature: entry.feature ?? null,
+        screen: entry.screen ?? null,
+      };
+    })
+    .filter(Boolean);
+
+  if (sanitized.length === 0) {
+    return null;
+  }
+
+  return sanitized;
+}
+
+function parseCanaryAssignmentsHeader(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return sanitizeCanaryAssignments(parsed);
+  } catch (err) {
+    return null;
+  }
+}
+
+function mergeCanaryAssignmentsMeta(meta, assignments) {
+  const sanitized = sanitizeCanaryAssignments(assignments);
+  if (!sanitized) {
+    return meta && typeof meta === 'object' ? { ...meta } : meta;
+  }
+  const base = meta && typeof meta === 'object' ? { ...meta } : {};
+  base.canaryAssignments = sanitized;
+  return base;
+}
+
 export async function fetchItemAggregate(itemId, { signal } = {}) {
   if (!Number.isFinite(Number(itemId)) || Number(itemId) <= 0) {
     throw new Error('ID de ítem inválido');
@@ -133,19 +183,26 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
   const response = await fetchWithRetry(requestUrl, requestOptions);
   const etag = getHeader(response, 'ETag');
   const lastModified = getHeader(response, 'Last-Modified');
+  const canaryAssignmentsHeader = getHeader(response, 'X-Canary-Assignments');
+  const headerAssignments = parseCanaryAssignmentsHeader(canaryAssignmentsHeader);
 
   if (response.status === 304) {
     if (cached?.data) {
+      const nextMeta = headerAssignments
+        ? mergeCanaryAssignmentsMeta(cached.meta, headerAssignments)
+        : cached?.meta && typeof cached.meta === 'object'
+        ? { ...cached.meta }
+        : cached.meta;
       writeCache(id, requestLang, {
         etag: etag || cached.etag || null,
         lastModified: lastModified || cached.lastModified || null,
         data: cached.data,
-        meta: cached.meta,
+        meta: nextMeta,
       });
-      const model = toAggregateUiModel({ data: cached.data, meta: cached.meta });
+      const model = toAggregateUiModel({ data: cached.data, meta: nextMeta });
       return {
         data: cached.data,
-        meta: cached.meta,
+        meta: nextMeta,
         model,
         status: 304,
         fromCache: true,
@@ -160,9 +217,12 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
   }
   const raw = await response.json().catch(() => null);
   const { data, meta } = normalizeApiResponse(raw);
-  const model = toAggregateUiModel({ data, meta });
-  writeCache(id, requestLang, { etag, lastModified, data, meta });
-  return { data, meta, model, status: response.status, fromCache: false };
+  const metaWithAssignments = headerAssignments
+    ? mergeCanaryAssignmentsMeta(meta, headerAssignments)
+    : meta;
+  const model = toAggregateUiModel({ data, meta: metaWithAssignments });
+  writeCache(id, requestLang, { etag, lastModified, data, meta: metaWithAssignments });
+  return { data, meta: metaWithAssignments, model, status: response.status, fromCache: false };
 }
 
 export function __clearAggregateItemCacheForTests() {
