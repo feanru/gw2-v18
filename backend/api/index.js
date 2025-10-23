@@ -14,12 +14,14 @@ const { createLegacyRouter } = require('./legacy');
 const legacyHandlersModule = require('./legacy/handlers');
 const { createLegacyHandlers } = legacyHandlersModule;
 const { parseNumericParamList } = legacyHandlersModule.__private;
+const canaryAssignmentsModule = require('./canaryAssignments');
 
 const { DEFAULT_LANG, FALLBACK_LANGS } = aggregateModule;
 let buildItemAggregateFn = aggregateModule.buildItemAggregate;
 let getCachedAggregateFn = aggregateModule.getCachedAggregate;
 let scheduleAggregateBuildFn = aggregateModule.scheduleAggregateBuild;
 let isAggregateExpiredFn = aggregateModule.isAggregateExpired;
+let fetchCanaryAssignmentsFn = canaryAssignmentsModule.fetchAssignmentsFromRedis;
 
 const ADMIN_TOKEN = (process.env.ADMIN_DASHBOARD_TOKEN || '').trim() || null;
 const DASHBOARD_WINDOW_MINUTES = Number.parseInt(
@@ -830,6 +832,43 @@ function computeConditionalHeaders(meta, itemId, lang, options = {}) {
   }
 
   return { headers, snapshotIso: null, snapshotId: null, ttlMs: null };
+}
+
+function attachCanaryAssignmentsMeta(meta, assignments) {
+  if (!meta || typeof meta !== 'object') {
+    return meta;
+  }
+  if (!assignments || !Array.isArray(assignments.list) || assignments.list.length === 0) {
+    return meta;
+  }
+  meta.canaryAssignments = assignments.list.map((entry) => ({
+    scope: entry.scope,
+    bucket: entry.bucket,
+    assignedAt: entry.assignedAt ?? null,
+    expiresAt: entry.expiresAt ?? null,
+    source: entry.source ?? null,
+    feature: entry.feature ?? null,
+    screen: entry.screen ?? null,
+  }));
+  return meta;
+}
+
+async function collectCanaryAssignments() {
+  try {
+    const redis = await getRedisClient();
+    if (!redis) {
+      return { list: [], map: {}, raw: null };
+    }
+    const result = await fetchCanaryAssignmentsFn(redis);
+    if (result && Array.isArray(result.list)) {
+      return result;
+    }
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(`[canary] failed to fetch assignments: ${err.message}`);
+    }
+  }
+  return { list: [], map: {}, raw: null };
 }
 
 function shouldSendNotModified(req, headers, snapshotIso, options = {}) {
@@ -3019,6 +3058,10 @@ async function buildDashboardSnapshot() {
   const metrics = await metricsCursor.toArray();
   const totalResponses = metrics.length;
   const staleResponses = metrics.reduce((acc, entry) => (entry && entry.stale ? acc + 1 : acc), 0);
+  const notModifiedResponses = metrics.reduce(
+    (acc, entry) => (entry && Number(entry.statusCode) === 304 ? acc + 1 : acc),
+    0,
+  );
   const durations = metrics
     .map((entry) => (entry && Number.isFinite(entry.durationMs) ? Number(entry.durationMs) : null))
     .filter((value) => value !== null)
@@ -3031,14 +3074,24 @@ async function buildDashboardSnapshot() {
     .map((entry) => (entry && Number.isFinite(entry.responseBytes) ? Number(entry.responseBytes) : null))
     .filter((value) => value !== null)
     .sort((a, b) => a - b);
+  const payloadTotalBytes = metrics.reduce((acc, entry) => {
+    if (!entry || !Number.isFinite(entry.responseBytes)) {
+      return acc;
+    }
+    return acc + Number(entry.responseBytes);
+  }, 0);
   const p95 = computePercentile(durations, 0.95);
   const p99 = computePercentile(durations, 0.99);
+  const p50 = computePercentile(durations, 0.5);
   const ttfbP95 = computePercentile(ttfbValues, 0.95);
   const ttfbP99 = computePercentile(ttfbValues, 0.99);
+  const ttfbP50 = computePercentile(ttfbValues, 0.5);
   const payloadP95 = computePercentile(payloadSizes, 0.95);
   const payloadP99 = computePercentile(payloadSizes, 0.99);
+  const payloadP50 = computePercentile(payloadSizes, 0.5);
   const ttfbAverage = computeAverage(ttfbValues);
   const payloadAverage = computeAverage(payloadSizes);
+  const bytesPerVisit = totalResponses > 0 ? payloadTotalBytes / totalResponses : null;
 
   const statusRecords = await db
     .collection(SYNC_STATUS_COLLECTION)
@@ -3088,6 +3141,8 @@ async function buildDashboardSnapshot() {
   }
 
   const staleRatio = totalResponses > 0 ? staleResponses / totalResponses : null;
+  const stalePercentage = staleRatio != null ? staleRatio * 100 : null;
+  const notModifiedRatio = totalResponses > 0 ? notModifiedResponses / totalResponses : null;
   if (staleRatio !== null && staleRatio > 0.1) {
     registerAlert({
       type: 'stale-responses',
@@ -3212,23 +3267,32 @@ async function buildDashboardSnapshot() {
       total: totalResponses,
       stale: staleResponses,
       ratio: staleRatio,
+      stalePercentage,
+      notModified: notModifiedResponses,
+      notModifiedRatio,
+      bytesPerVisit,
     },
     latency: {
+      p50,
       p95,
       p99,
       sampleCount: durations.length,
     },
     ttfb: {
       average: ttfbAverage,
+      p50: ttfbP50,
       p95: ttfbP95,
       p99: ttfbP99,
       sampleCount: ttfbValues.length,
     },
     payload: {
       averageBytes: payloadAverage,
+      p50Bytes: payloadP50,
       p95Bytes: payloadP95,
       p99Bytes: payloadP99,
       sampleCount: payloadSizes.length,
+      totalBytes: payloadTotalBytes,
+      bytesPerVisit,
     },
     ingestionFailures: {
       total24h: totalIngestionFailures,
@@ -3619,6 +3683,8 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
   let cacheAgeMs = null;
   let cacheStoredAt = null;
   const fields = aggregateHelpers.parseAggregateFields(url?.searchParams?.get('fields'));
+  const canaryAssignments = await collectCanaryAssignments();
+  const withCanaryMeta = (meta) => attachCanaryAssignmentsMeta(meta, canaryAssignments);
   try {
     const cacheLookupStart = process.hrtime.bigint();
     cached = await getCachedAggregateFn(itemId, lang);
@@ -3675,7 +3741,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
         writeNotModified(res, headers);
         return;
       }
-      ok(res, filteredData, meta, { errors, headers });
+      ok(res, filteredData, withCanaryMeta(meta), { errors, headers });
       statusCode = 200;
       return;
     }
@@ -3741,7 +3807,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
         writeNotModified(res, headers);
         return;
       }
-      ok(res, filteredData, meta, { errors, headers });
+      ok(res, filteredData, withCanaryMeta(meta), { errors, headers });
       statusCode = 200;
       return;
     }
@@ -3751,7 +3817,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
     ok(
       res,
       null,
-      { lang, itemId, source: 'aggregate', stale: false, lastUpdated: null },
+      withCanaryMeta({ lang, itemId, source: 'aggregate', stale: false, lastUpdated: null }),
       {
         errors: [{ code: 'not_found', msg: 'Aggregate snapshot not available' }],
       },
@@ -3789,14 +3855,14 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       } else {
         snapshotTtlMs = 0;
       }
-      ok(res, cached.data, meta, { errors, headers });
+      ok(res, cached.data, withCanaryMeta(meta), { errors, headers });
     } else {
       stale = false;
       statusCode = 200;
       ok(
         res,
         null,
-        { lang, itemId, source: 'aggregate', stale: false, lastUpdated: null },
+        withCanaryMeta({ lang, itemId, source: 'aggregate', stale: false, lastUpdated: null }),
         {
           errors: [
             { code: 'aggregate_failed', msg: 'Aggregate snapshot not available' },
@@ -4086,8 +4152,10 @@ async function fetchLegacyBundlePayload(ids, lang) {
 
 async function handleAggregateBundleJson(req, res, url, lang) {
   const ids = parseNumericParamList(url.searchParams, 'ids');
+  const canaryAssignments = await collectCanaryAssignments();
+  const decorateMeta = (meta) => attachCanaryAssignmentsMeta(meta, canaryAssignments);
   if (ids.length === 0) {
-    const meta = { lang, source: 'aggregate', stale: false };
+    const meta = decorateMeta({ lang, source: 'aggregate', stale: false });
     const payload = {
       priceMap: {},
       iconMap: {},
@@ -4115,7 +4183,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
       source: 'aggregate',
       stale: false,
     });
-    const enrichedMeta = { ...meta, pagination };
+    const enrichedMeta = decorateMeta({ ...meta, pagination });
     const emptyPayload = aggregateHelpers.filterAggregateBundlePayload(
       { priceMap: {}, iconMap: {}, rarityMap: {}, meta: enrichedMeta },
       fields,
@@ -4149,7 +4217,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
       errors: aggregateResult.errors,
       snapshot: aggregateResult.snapshot,
     });
-    const enrichedMeta = { ...meta, pagination };
+    const enrichedMeta = decorateMeta({ ...meta, pagination });
     const payload = aggregateHelpers.filterAggregateBundlePayload(
       { priceMap, iconMap, rarityMap, meta: enrichedMeta },
       fields,
@@ -4169,7 +4237,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
   const fallbackPayload = fallbackResult.payload;
 
   if (!fallbackPayload || fallbackResult.statusCode >= 400) {
-    const meta = { lang, source: 'aggregate', stale: true, pagination };
+    const meta = decorateMeta({ lang, source: 'aggregate', stale: true, pagination });
     const payload = aggregateHelpers.filterAggregateBundlePayload(
       {
         priceMap: {},
@@ -4209,7 +4277,7 @@ async function handleAggregateBundleJson(req, res, url, lang) {
     errors: fallbackPayload.errors,
     snapshot: snapshotValue,
   });
-  const enrichedMeta = { ...meta, pagination };
+  const enrichedMeta = decorateMeta({ ...meta, pagination });
   const payload = aggregateHelpers.filterAggregateBundlePayload(
     { priceMap, iconMap, rarityMap, meta: enrichedMeta },
     fields,
@@ -4575,6 +4643,16 @@ module.exports.__setCollectJsErrorMetrics = (fn) => {
 
 module.exports.__resetCollectJsErrorMetrics = () => {
   collectJsErrorMetricsFn = defaultCollectJsErrorMetrics;
+};
+
+module.exports.__setCanaryAssignmentsFetcher = (fn) => {
+  if (typeof fn === 'function') {
+    fetchCanaryAssignmentsFn = fn;
+  }
+};
+
+module.exports.__resetCanaryAssignmentsFetcher = () => {
+  fetchCanaryAssignmentsFn = canaryAssignmentsModule.fetchAssignmentsFromRedis;
 };
 
 module.exports.__setMongoClient = (client) => {

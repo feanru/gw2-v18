@@ -239,8 +239,48 @@ function createMetricsHandler({
           }),
         );
       }
+      if (Number.isFinite(responses.stalePercentage)) {
+        lines.push(
+          formatMetric('gw2_api_responses_stale_percentage', responses.stalePercentage, {
+            help: 'Percentage of stale responses over the total responses',
+            type: 'gauge',
+          }),
+        );
+      }
+      if (Number.isFinite(responses.notModified)) {
+        lines.push(
+          formatMetric('gw2_api_responses_not_modified_total', responses.notModified, {
+            help: 'Total 304 Not Modified responses in the current dashboard window',
+            type: 'gauge',
+          }),
+        );
+      }
+      if (Number.isFinite(responses.notModifiedRatio)) {
+        lines.push(
+          formatMetric('gw2_api_responses_not_modified_ratio', responses.notModifiedRatio, {
+            help: 'Ratio of 304 Not Modified responses over the total responses',
+            type: 'gauge',
+          }),
+        );
+      }
+      if (Number.isFinite(responses.bytesPerVisit)) {
+        lines.push(
+          formatMetric('gw2_api_bytes_per_visit', responses.bytesPerVisit, {
+            help: 'Average response payload bytes per visit',
+            type: 'gauge',
+          }),
+        );
+      }
 
       const latency = snapshot.latency || {};
+      if (Number.isFinite(latency.p50)) {
+        lines.push(
+          formatMetric('gw2_api_latency_p50_ms', latency.p50, {
+            help: 'p50 latency for API responses in milliseconds',
+            type: 'gauge',
+          }),
+        );
+      }
       if (Number.isFinite(latency.p95)) {
         lines.push(
           formatMetric('gw2_api_latency_p95_ms', latency.p95, {
@@ -259,6 +299,14 @@ function createMetricsHandler({
       }
 
       const ttfb = snapshot.ttfb || {};
+      if (Number.isFinite(ttfb.p50)) {
+        lines.push(
+          formatMetric('gw2_api_ttfb_p50_ms', ttfb.p50, {
+            help: 'p50 time-to-first-byte in milliseconds',
+            type: 'gauge',
+          }),
+        );
+      }
       if (Number.isFinite(ttfb.p95)) {
         lines.push(
           formatMetric('gw2_api_ttfb_p95_ms', ttfb.p95, {
@@ -277,10 +325,42 @@ function createMetricsHandler({
       }
 
       const payloadStats = snapshot.payload || {};
+      if (Number.isFinite(payloadStats.p50Bytes)) {
+        lines.push(
+          formatMetric('gw2_api_payload_p50_bytes', payloadStats.p50Bytes, {
+            help: 'p50 response payload size in bytes',
+            type: 'gauge',
+          }),
+        );
+      }
       if (Number.isFinite(payloadStats.p95Bytes)) {
         lines.push(
           formatMetric('gw2_api_payload_p95_bytes', payloadStats.p95Bytes, {
             help: 'p95 response payload size in bytes',
+            type: 'gauge',
+          }),
+        );
+      }
+      if (Number.isFinite(payloadStats.p99Bytes)) {
+        lines.push(
+          formatMetric('gw2_api_payload_p99_bytes', payloadStats.p99Bytes, {
+            help: 'p99 response payload size in bytes',
+            type: 'gauge',
+          }),
+        );
+      }
+      if (Number.isFinite(payloadStats.bytesPerVisit)) {
+        lines.push(
+          formatMetric('gw2_api_payload_bytes_per_visit', payloadStats.bytesPerVisit, {
+            help: 'Average payload bytes per visit (excluding missing measurements)',
+            type: 'gauge',
+          }),
+        );
+      }
+      if (Number.isFinite(payloadStats.totalBytes)) {
+        lines.push(
+          formatMetric('gw2_api_payload_total_bytes', payloadStats.totalBytes, {
+            help: 'Total payload bytes summed across measured responses in the window',
             type: 'gauge',
           }),
         );

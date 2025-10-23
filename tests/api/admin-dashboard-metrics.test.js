@@ -3,10 +3,14 @@ const assert = require('assert');
 process.env.NODE_ENV = 'test';
 process.env.ADMIN_INDEX_SIZE_ALERT_BYTES = '1024';
 
+const { registerMockDeps } = require('../helpers/register-mock-deps.js');
+
+const restoreDeps = registerMockDeps();
+
 const api = require('../../backend/api/index.js');
 const { createMetricsHandler } = require('../../backend/api/metrics.js');
 
-function createDbStub(statuses) {
+function createDbStub(statuses, metricsEntries = []) {
   const statsMap = {
     items: { count: 120, storageSize: 4096, totalIndexSize: 4096, indexSizes: { itemIndex: 4096 } },
     prices: { count: 80, storageSize: 2048, totalIndexSize: 512 },
@@ -35,7 +39,7 @@ function createDbStub(statuses) {
   const collections = {
     apiMetrics: createCollection('apiMetrics', {
       find: () => ({
-        toArray: async () => [],
+        toArray: async () => metricsEntries,
       }),
     }),
     syncStatus: {
@@ -81,8 +85,35 @@ async function run() {
     },
   ];
 
+  const metricsEntries = [
+    {
+      stale: false,
+      durationMs: 120,
+      statusCode: 200,
+      ttfbMs: 60,
+      responseBytes: 4096,
+      createdAt: new Date(now - 2 * 60 * 1000),
+    },
+    {
+      stale: true,
+      durationMs: 240,
+      statusCode: 200,
+      ttfbMs: 110,
+      responseBytes: 8192,
+      createdAt: new Date(now - 60 * 1000),
+    },
+    {
+      stale: false,
+      durationMs: 180,
+      statusCode: 304,
+      ttfbMs: 80,
+      responseBytes: 2048,
+      createdAt: new Date(now - 30 * 1000),
+    },
+  ];
+
   const clientStub = {
-    db: () => createDbStub(statuses),
+    db: () => createDbStub(statuses, metricsEntries),
   };
 
   api.__setMongoClient(clientStub);
@@ -128,6 +159,12 @@ async function run() {
     assert.strictEqual(snapshot.jsErrors.count, 120);
     assert.strictEqual(snapshot.jsErrors.perMinute, 8);
     assert.strictEqual(snapshot.jsErrors.lastMessage, 'ReferenceError: boom');
+    assert.strictEqual(snapshot.responses.notModified, 1);
+    assert.ok(snapshot.responses.bytesPerVisit > 0, 'bytes per visit should be calculated');
+    assert.ok(Number.isFinite(snapshot.latency.p50), 'latency p50 should be available');
+    assert.ok(Number.isFinite(snapshot.ttfb.p50), 'ttfb p50 should be available');
+    assert.ok(Number.isFinite(snapshot.payload.p50Bytes), 'payload p50 should be available');
+    assert.ok(Number.isFinite(snapshot.payload.totalBytes), 'payload total bytes should be tracked');
 
     const freshnessAge = snapshot.freshness.items.lastUpdatedAgeMinutes;
     assert.ok(freshnessAge >= 89, 'items freshness should be older than 89 minutes');
@@ -191,6 +228,33 @@ async function run() {
       metricsRes.body.includes('gw2_redis_up 1'),
       'metrics payload should report redis availability',
     );
+    assert.ok(
+      metricsRes.body.includes('gw2_api_latency_p50_ms'),
+      'metrics payload should include latency p50',
+    );
+    assert.ok(
+      metricsRes.body.includes('gw2_api_ttfb_p50_ms'),
+      'metrics payload should include ttfb p50',
+    );
+    assert.ok(
+      metricsRes.body.includes('gw2_api_payload_p50_bytes'),
+      'metrics payload should include payload p50 bytes',
+    );
+    assert.ok(
+      metricsRes.body.includes('gw2_api_responses_not_modified_total'),
+      'metrics payload should include not modified total metric',
+    );
+    assert.ok(
+      metricsRes.body.includes('gw2_api_bytes_per_visit'),
+      'metrics payload should include bytes per visit metric',
+    );
+    const bytesPerVisitLine = metricsRes.body
+      .split('\n')
+      .find((line) => line.startsWith('gw2_api_bytes_per_visit '));
+    assert.ok(bytesPerVisitLine, 'bytes per visit metric line should be present');
+    const bytesPerVisitValue = Number(bytesPerVisitLine.split(' ').pop());
+    assert.ok(Number.isFinite(bytesPerVisitValue), 'bytes per visit metric should be numeric');
+    assert.ok(bytesPerVisitValue > 0, 'bytes per visit metric should be greater than zero');
 
     console.log('tests/api/admin-dashboard-metrics.test.js passed');
   } finally {
@@ -200,7 +264,13 @@ async function run() {
   }
 }
 
-run().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+run()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    if (typeof restoreDeps === 'function') {
+      restoreDeps();
+    }
+  });

@@ -2,6 +2,10 @@ const assert = require('assert');
 
 process.env.NODE_ENV = 'test';
 
+const { registerMockDeps } = require('../helpers/register-mock-deps.js');
+
+const restoreDeps = registerMockDeps();
+
 const api = require('../../backend/api/index.js');
 
 function createMockResponse() {
@@ -152,6 +156,22 @@ async function testAggregateSuccess() {
       return aggregates.get(itemId) || null;
     },
   });
+  api.__setCanaryAssignmentsFetcher(async () => ({
+    list: [
+      {
+        scope: 'feature:bundle-test',
+        bucket: 7,
+        assignedAt: '2024-01-01T00:00:00.000Z',
+        expiresAt: null,
+        source: 'redis',
+        feature: 'bundle-test',
+        screen: null,
+      },
+    ],
+    map: {},
+    raw: null,
+  }));
+  api.__setRedisClient({ isOpen: true });
 
   const request = createRequest('/api/aggregate/bundle?ids=1,2&lang=es');
   const response = createMockResponse();
@@ -160,6 +180,8 @@ async function testAggregateSuccess() {
     await api.handleApiRequest(request, response);
   } finally {
     api.__resetAggregateOverrides();
+    api.__resetCanaryAssignmentsFetcher();
+    api.__resetRedisClient();
   }
 
   assert.strictEqual(response.statusCode, 200);
@@ -170,6 +192,17 @@ async function testAggregateSuccess() {
   assert.strictEqual(payload.rarityMap['2'], 'Fine');
   assert.strictEqual(payload.meta.lang, 'es');
   assert.strictEqual(payload.meta.source, 'aggregate');
+  assert.deepStrictEqual(payload.meta.canaryAssignments, [
+    {
+      scope: 'feature:bundle-test',
+      bucket: 7,
+      assignedAt: '2024-01-01T00:00:00.000Z',
+      expiresAt: null,
+      source: 'redis',
+      feature: 'bundle-test',
+      screen: null,
+    },
+  ]);
   const cacheControl = response.headers['Cache-Control'] || response.headers['cache-control'];
   assert.strictEqual(
     cacheControl,
@@ -188,6 +221,8 @@ async function testAggregateFallback() {
       return null;
     },
   });
+  api.__setCanaryAssignmentsFetcher(async () => ({ list: [], map: {}, raw: null }));
+  api.__setRedisClient({ isOpen: true });
 
   const config = {
     defaultLang: 'es',
@@ -209,6 +244,8 @@ async function testAggregateFallback() {
   } finally {
     api.__resetLegacyOverrides();
     api.__resetAggregateOverrides();
+    api.__resetCanaryAssignmentsFetcher();
+    api.__resetRedisClient();
   }
 
   assert.strictEqual(response.statusCode, 200);
@@ -267,6 +304,8 @@ async function testAggregatePaginationAndFields() {
       return aggregates.get(itemId) || null;
     },
   });
+  api.__setCanaryAssignmentsFetcher(async () => ({ list: [], map: {}, raw: null }));
+  api.__setRedisClient({ isOpen: true });
 
   const request = createRequest('/api/aggregate/bundle?ids=1,2,3&lang=es&page=2&pageSize=1&fields=priceMap,iconMap');
   const response = createMockResponse();
@@ -275,6 +314,8 @@ async function testAggregatePaginationAndFields() {
     await api.handleApiRequest(request, response);
   } finally {
     api.__resetAggregateOverrides();
+    api.__resetCanaryAssignmentsFetcher();
+    api.__resetRedisClient();
   }
 
   assert.strictEqual(response.statusCode, 200);
@@ -296,7 +337,13 @@ async function run() {
   console.log('tests/api/aggregate-bundle-json.test.js passed');
 }
 
-run().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+run()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    if (typeof restoreDeps === 'function') {
+      restoreDeps();
+    }
+  });
