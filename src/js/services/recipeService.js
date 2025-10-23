@@ -8,8 +8,19 @@ import { getConfig } from '../config.js';
 import { normalizeApiResponse } from '../utils/apiResponse.js';
 import { toUiModel as toRecipeUiModel } from '../adapters/recipeAdapter.js';
 import { fromEntry as priceEntryToSummary } from '../adapters/priceAdapter.js';
+import { prepareLangRequest, getActiveLanguage } from './langContext.js';
 
 const MAX_BUNDLE_BATCH = 35;
+
+function buildBundleCacheKey(id, lang) {
+    const normalizedLang = typeof lang === 'string' && lang ? lang : getActiveLanguage();
+    return `bundle_${normalizedLang}_${id}`;
+}
+
+function buildRecipeCacheKey(id, lang) {
+    const normalizedLang = typeof lang === 'string' && lang ? lang : getActiveLanguage();
+    return `recipe_${normalizedLang}_${id}`;
+}
 
 function recordBundleFallback(ids, error) {
     if (typeof window === 'undefined' || !window) {
@@ -48,7 +59,7 @@ function joinApiPath(baseUrl, path) {
     return `${trimmedBase}/${normalizedPath}`;
 }
 
-function applyBundleEntries(payload, results) {
+function applyBundleEntries(payload, results, lang) {
     const { data, meta } = normalizeApiResponse(payload);
     const entries = Array.isArray(data) ? data : [];
     if (!Array.isArray(data) && Array.isArray(meta?.errors) && meta.errors.length) {
@@ -57,13 +68,14 @@ function applyBundleEntries(payload, results) {
     if (entries.length) {
         entries.forEach(entry => {
             const entryKey = String(entry.id);
+            const bundleCacheKey = buildBundleCacheKey(entryKey, lang);
             const adapters = {
                 recipe: toRecipeUiModel({ data: entry?.recipe ?? null }),
                 prices: priceEntryToSummary(entry?.market ?? null)
             };
             const normalizedEntry = { ...entry, adapters };
             results.set(entryKey, normalizedEntry);
-            setCached(`bundle_${entryKey}`, normalizedEntry);
+            setCached(bundleCacheKey, normalizedEntry, undefined, { lang });
             if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
                 window.dispatchEvent(new CustomEvent('bundleItemRefreshed', { detail: normalizedEntry }));
             }
@@ -80,12 +92,13 @@ function applyBundleEntries(payload, results) {
 export async function getItemBundles(ids = []) {
     if (!Array.isArray(ids) || ids.length === 0) return [];
 
+    const lang = getActiveLanguage();
     const results = new Map();
     const toFetch = [];
 
     ids.forEach(id => {
         const key = String(id);
-        const cached = getCached(`bundle_${key}`);
+        const cached = getCached(buildBundleCacheKey(key, lang));
         if (cached) {
             results.set(key, cached);
         } else {
@@ -103,9 +116,11 @@ export async function getItemBundles(ids = []) {
             let apiBundleSucceeded = false;
 
             if (shouldUseItemApi) {
-                const apiUrl = `${joinApiPath(API_BASE_URL, '/items/bundle')}?${params}`;
+                const { url: apiUrl, options: apiOptions } = prepareLangRequest(
+                    `${joinApiPath(API_BASE_URL, '/items/bundle')}?${params}`
+                );
                 try {
-                    const response = await fetchWithRetry(apiUrl);
+                    const response = await fetchWithRetry(apiUrl, apiOptions);
                     if (!response.ok) {
                         throw new Error(`Respuesta ${response.status} inválida en bundle API`);
                     }
@@ -113,7 +128,7 @@ export async function getItemBundles(ids = []) {
                     if (!payload) {
                         throw new Error('Payload JSON no válido en bundle API');
                     }
-                    applyBundleEntries(payload, results);
+                    applyBundleEntries(payload, results, lang);
                     apiBundleSucceeded = true;
                 } catch (err) {
                     apiBundleSucceeded = false;
@@ -124,12 +139,15 @@ export async function getItemBundles(ids = []) {
 
             if (!shouldUseItemApi || !apiBundleSucceeded) {
                 try {
-                    const response = await fetchWithRetry(`/backend/api/dataBundle.php?${params}`);
+                    const { url: phpUrl, options: phpOptions } = prepareLangRequest(
+                        `/backend/api/dataBundle.php?${params}`
+                    );
+                    const response = await fetchWithRetry(phpUrl, phpOptions);
                     if (!response.ok) {
                         console.error('Error en getItemBundles: respuesta no válida');
                     } else {
                         const payload = await response.json().catch(() => null);
-                        applyBundleEntries(payload, results);
+                        applyBundleEntries(payload, results, lang);
                     }
                 } catch (e) {
                     console.error('Error en getItemBundles:', e);
@@ -172,12 +190,14 @@ export async function getRecipesForItem(itemId) {
  * @returns {Promise<Object>} - Detalles de la receta
  */
 export async function getRecipeDetails(recipeId) {
-    const cacheKey = `recipe_${recipeId}`;
+    const lang = getActiveLanguage();
+    const cacheKey = buildRecipeCacheKey(recipeId, lang);
     const cached = getCached(cacheKey, true);
 
     try {
         const { API_BASE_URL } = getConfig();
-        const response = await fetchWithCache(`${API_BASE_URL}/recipes/${recipeId}`, {}, cacheKey, cached);
+        const { url, options } = prepareLangRequest(`${API_BASE_URL}/recipes/${recipeId}`);
+        const response = await fetchWithCache(url, options, cacheKey, cached);
         if (!response.ok) {
             return null;
         }
@@ -189,7 +209,7 @@ export async function getRecipeDetails(recipeId) {
         recipe.lastUpdated = new Date().toISOString();
         const etag = response.headers.get('ETag');
         const lastModified = response.headers.get('Last-Modified');
-        setCached(cacheKey, recipe, undefined, { etag, lastModified });
+        setCached(cacheKey, recipe, undefined, { etag, lastModified, lang });
         return recipe;
     } catch (error) {
         console.error('Error en getRecipeDetails:', error);

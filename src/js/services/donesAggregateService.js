@@ -1,17 +1,26 @@
 import fetchWithRetry from '../utils/fetchWithRetry.js';
+import { prepareLangRequest, getActiveLanguage } from './langContext.js';
 
 const DEFAULT_TTL = 2 * 60 * 1000; // 2 minutos
 const DEFAULT_PAGE_SIZE = 50;
 const DEFAULT_FIELDS = ['priceMap', 'iconMap', 'rarityMap', 'itemMap'];
 
-const aggregateState = {
-  items: new Map(),
-  prices: new Map(),
-  meta: null,
-  warnings: [],
-  errors: [],
-  expiresAt: 0,
-};
+const aggregateStateByLang = new Map();
+
+function getAggregateState(lang) {
+  const normalized = typeof lang === 'string' && lang ? lang : getActiveLanguage();
+  if (!aggregateStateByLang.has(normalized)) {
+    aggregateStateByLang.set(normalized, {
+      items: new Map(),
+      prices: new Map(),
+      meta: null,
+      warnings: [],
+      errors: [],
+      expiresAt: 0,
+    });
+  }
+  return aggregateStateByLang.get(normalized);
+}
 
 function normalizeId(value) {
   const numeric = Number(value);
@@ -62,10 +71,9 @@ function objectToMap(source, transform) {
   return map;
 }
 
-async function requestAggregate(ids, options = {}) {
+async function requestAggregate(ids, lang, options = {}) {
   const params = new URLSearchParams();
   params.set('ids', ids.join(','));
-  params.set('lang', 'es');
   if (Array.isArray(options.fields) && options.fields.length > 0) {
     params.set('fields', options.fields.join(','));
   }
@@ -75,9 +83,11 @@ async function requestAggregate(ids, options = {}) {
   if (Number.isFinite(Number(options.pageSize)) && Number(options.pageSize) > 0) {
     params.set('pageSize', Math.floor(Number(options.pageSize)));
   }
-  const response = await fetchWithRetry(`/api/aggregate/bundle?${params.toString()}`, {
-    signal: options.signal,
-  });
+  const { url, options: requestOptions } = prepareLangRequest(
+    `/api/aggregate/bundle?${params.toString()}`,
+    { signal: options.signal },
+  );
+  const response = await fetchWithRetry(url, requestOptions);
   if (!response.ok) {
     throw new Error(`Error ${response.status} al consultar el agregado de bundle`);
   }
@@ -96,6 +106,9 @@ export async function fetchDonesAggregate(rawIds = [], options = {}) {
   const ids = Array.from(new Set((Array.isArray(rawIds) ? rawIds : [rawIds])
     .map((value) => normalizeId(value))
     .filter((value) => Number.isFinite(value) && value > 0)));
+
+  const lang = getActiveLanguage();
+  const aggregateState = getAggregateState(lang);
 
   const ttl = Number.isFinite(Number(options.ttl)) && Number(options.ttl) > 0
     ? Number(options.ttl)
@@ -159,7 +172,7 @@ export async function fetchDonesAggregate(rawIds = [], options = {}) {
   let currentPage = 1;
   let totalPages = 1;
   do {
-    const payload = await requestAggregate(idsToFetch, {
+    const payload = await requestAggregate(idsToFetch, lang, {
       signal: options.signal,
       page: currentPage,
       pageSize,
@@ -314,10 +327,13 @@ export async function fetchDonesAggregate(rawIds = [], options = {}) {
 }
 
 export function __resetDonesAggregateCacheForTests() {
-  aggregateState.items.clear();
-  aggregateState.prices.clear();
-  aggregateState.meta = null;
-  aggregateState.warnings = [];
-  aggregateState.errors = [];
-  aggregateState.expiresAt = 0;
+  aggregateStateByLang.forEach((state) => {
+    state.items.clear();
+    state.prices.clear();
+    state.meta = null;
+    state.warnings = [];
+    state.errors = [];
+    state.expiresAt = 0;
+  });
+  aggregateStateByLang.clear();
 }

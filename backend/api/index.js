@@ -138,7 +138,51 @@ function normalizeLang(lang) {
   return normalized || DEFAULT_LANG;
 }
 
-function buildCandidateLangs(lang) {
+function parseAcceptLanguage(header) {
+  if (typeof header !== 'string') {
+    return [];
+  }
+  const entries = header
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const [token, ...params] = part.split(';');
+      let quality = 1;
+      params.forEach((param) => {
+        const [key, value] = param.split('=');
+        if (!key) return;
+        if (key.trim().toLowerCase() === 'q') {
+          const parsed = Number.parseFloat(value);
+          if (Number.isFinite(parsed)) {
+            quality = parsed;
+          }
+        }
+      });
+      return { token: token.trim(), quality };
+    })
+    .filter((entry) => entry.token);
+
+  entries.sort((a, b) => b.quality - a.quality);
+
+  const result = [];
+  const seen = new Set();
+  entries.forEach(({ token }) => {
+    const normalized = normalizeLang(token);
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      result.push(normalized);
+    }
+    const base = normalized && normalized.includes('-') ? normalized.split('-')[0] : null;
+    if (base && !seen.has(base)) {
+      seen.add(base);
+      result.push(base);
+    }
+  });
+  return result;
+}
+
+function buildCandidateLangs(lang, extras = []) {
   const normalized = normalizeLang(lang);
   const list = [];
   const seen = new Set();
@@ -149,6 +193,9 @@ function buildCandidateLangs(lang) {
     list.push(normalizedValue);
   }
   add(normalized);
+  if (Array.isArray(extras)) {
+    extras.forEach(add);
+  }
   if (normalized !== DEFAULT_LANG) add(DEFAULT_LANG);
   if (Array.isArray(FALLBACK_LANGS)) {
     FALLBACK_LANGS.forEach(add);
@@ -774,6 +821,9 @@ function writeResponse(
     'Cache-Control': 'no-store, no-cache, must-revalidate',
     ...additionalHeaders,
   };
+  if (meta && typeof meta.lang === 'string' && meta.lang) {
+    headers['Content-Language'] = String(meta.lang);
+  }
   headers['Content-Length'] = Buffer.byteLength(body);
   res.writeHead(statusCode, headers);
   res.end(body);
@@ -1528,8 +1578,8 @@ async function readNestedRecipeDocument(client, itemId) {
   return payload;
 }
 
-async function buildItemDetailsPayload(itemId, lang) {
-  const snapshot = await readItemSnapshot(itemId, lang);
+async function buildItemDetailsPayload(itemId, lang, langHints = []) {
+  const snapshot = await readItemSnapshot(itemId, lang, langHints);
   if (!snapshot || !snapshot.item) {
     return { snapshot: null, payload: null };
   }
@@ -1589,9 +1639,9 @@ async function buildItemDetailsPayload(itemId, lang) {
   };
 }
 
-async function readItemSnapshotDefault(itemId, lang) {
+async function readItemSnapshotDefault(itemId, lang, langHints = []) {
   const normalizedLang = normalizeLang(lang);
-  const candidateLangs = buildCandidateLangs(normalizedLang);
+  const candidateLangs = buildCandidateLangs(normalizedLang, langHints);
   const redis = await getRedisClient();
   if (redis) {
     try {
@@ -1964,9 +2014,9 @@ async function fetchItemSnapshotViaFallback({
   return null;
 }
 
-async function handleGetItem(res, itemId, lang) {
+async function handleGetItem(res, itemId, lang, langHints = []) {
   try {
-    const { snapshot, payload } = await buildItemDetailsPayload(itemId, lang);
+    const { snapshot, payload } = await buildItemDetailsPayload(itemId, lang, langHints);
     if (!snapshot || !payload || !payload.item) {
       ok(
         res,
@@ -1991,6 +2041,7 @@ async function handleGetItem(res, itemId, lang) {
 
     const snapshotMeta = snapshot.meta || {};
     const normalizedLang = snapshotMeta.lang ?? normalizeLang(lang);
+    const requestedNormalized = normalizeLang(lang);
     const meta = {
       ...snapshotMeta,
       lang: normalizedLang,
@@ -1999,6 +2050,16 @@ async function handleGetItem(res, itemId, lang) {
       itemId,
       stale: false,
     };
+    const warningSet = new Set(Array.isArray(meta.warnings) ? meta.warnings.map((entry) => String(entry)) : []);
+    if (requestedNormalized && normalizedLang && requestedNormalized !== normalizedLang) {
+      warningSet.add(`lang-fallback:${normalizedLang}`);
+      meta.requestedLang = requestedNormalized;
+    } else if (requestedNormalized) {
+      meta.requestedLang = requestedNormalized;
+    }
+    if (warningSet.size > 0) {
+      meta.warnings = Array.from(warningSet);
+    }
 
     ok(res, payload, meta, {
       headers: {
@@ -3222,7 +3283,15 @@ async function handleAdminDashboardRequest(req, res) {
 }
 
 function mergeAggregateMeta(cachedMeta, overrides = {}) {
-  const meta = { ...(cachedMeta || {}), ...overrides };
+  const {
+    warnings: overrideWarnings,
+    lang: overrideLang,
+    requestedLang,
+    ...restOverrides
+  } = overrides || {};
+
+  const baseMeta = cachedMeta ? { ...cachedMeta } : {};
+  const meta = { ...baseMeta, ...restOverrides };
   const hasOverrideSnapshot = Object.prototype.hasOwnProperty.call(overrides, 'snapshotAt');
   const hasCachedSnapshot = cachedMeta
     ? Object.prototype.hasOwnProperty.call(cachedMeta, 'snapshotAt')
@@ -3299,9 +3368,26 @@ function mergeAggregateMeta(cachedMeta, overrides = {}) {
   }
 
   meta.lastUpdated = lastUpdated;
-  if (cachedMeta && cachedMeta.warnings && !overrides.warnings) {
-    meta.warnings = cachedMeta.warnings;
-  }
+
+  const warningsSet = new Set();
+  const collectWarnings = (source) => {
+    if (!source) {
+      return;
+    }
+    const list = Array.isArray(source) ? source : [source];
+    list.forEach((entry) => {
+      if (entry == null) {
+        return;
+      }
+      const normalized = String(entry).trim();
+      if (normalized) {
+        warningsSet.add(normalized);
+      }
+    });
+  };
+  collectWarnings(baseMeta?.warnings);
+  collectWarnings(meta?.warnings);
+  collectWarnings(overrideWarnings);
 
   let errors = [];
   if (Array.isArray(cachedMeta?.errors)) {
@@ -3312,6 +3398,18 @@ function mergeAggregateMeta(cachedMeta, overrides = {}) {
   } else if (overrides.errors != null) {
     errors.push(overrides.errors);
   }
+
+  const requested = requestedLang ? normalizeLang(requestedLang) : normalizeLang(overrideLang);
+  const actualLang = normalizeLang(baseMeta?.lang ?? overrideLang ?? meta?.lang ?? requested ?? DEFAULT_LANG);
+  if (requested && requested !== actualLang) {
+    warningsSet.add(`lang-fallback:${actualLang}`);
+    meta.requestedLang = requested;
+  } else if (requested) {
+    meta.requestedLang = requested;
+  }
+
+  meta.lang = actualLang;
+  meta.warnings = Array.from(warningsSet);
 
   delete meta.errors;
 
@@ -3362,6 +3460,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       source = cached.meta?.source || 'aggregate';
       const { meta, errors } = mergeAggregateMeta(cached.meta, {
         lang,
+        requestedLang: lang,
         itemId,
         source: 'aggregate',
         stale,
@@ -3427,6 +3526,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       source = 'aggregate';
       const { meta, errors } = mergeAggregateMeta(built.meta, {
         lang,
+        requestedLang: lang,
         itemId,
         source: 'aggregate',
         stale: false,
@@ -3481,6 +3581,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
         cached.meta?.snapshotAt ?? cached.meta?.generatedAt ?? cached.meta?.lastUpdated ?? null;
       const { meta, errors } = mergeAggregateMeta(cached.meta, {
         lang,
+        requestedLang: lang,
         itemId,
         source: 'aggregate',
         stale: true,
@@ -4016,7 +4117,27 @@ async function handleApiRequest(req, res) {
     return;
   }
 
-  const lang = normalizeLang(url.searchParams.get('lang'));
+  const queryLang = url.searchParams.get('lang');
+  const normalizedQueryLang = queryLang ? normalizeLang(queryLang) : null;
+  const acceptLanguageHeader = req.headers?.['accept-language'] ?? req.headers?.['Accept-Language'];
+  const acceptLanguagePrefs = parseAcceptLanguage(acceptLanguageHeader);
+  const preferredLangs = [];
+  const addPreferred = (value) => {
+    const normalized = value ? normalizeLang(value) : null;
+    if (!normalized) {
+      return;
+    }
+    if (!preferredLangs.includes(normalized)) {
+      preferredLangs.push(normalized);
+    }
+  };
+  addPreferred(normalizedQueryLang);
+  acceptLanguagePrefs.forEach(addPreferred);
+  if (preferredLangs.length === 0) {
+    addPreferred(DEFAULT_LANG);
+  }
+  const lang = preferredLangs[0] || DEFAULT_LANG;
+  const langHints = preferredLangs.slice(1);
 
   if (pathname === '/api/market.csv') {
     await handleMarketCsvRequest(req, res, url);
@@ -4072,7 +4193,7 @@ async function handleApiRequest(req, res) {
       );
       return;
     }
-    await handleGetItem(res, itemId, lang);
+    await handleGetItem(res, itemId, lang, langHints);
     return;
   }
 
