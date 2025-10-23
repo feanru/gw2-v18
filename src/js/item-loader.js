@@ -3,7 +3,7 @@ import { startPriceUpdater } from './utils/priceUpdater.js';
 import { normalizeApiResponse } from './utils/apiResponse.js';
 import { isFeatureEnabled } from './utils/featureFlags.js';
 import { getConfig } from './config.js';
-import { getBucket } from './utils/canaryBucket.js';
+import { getBucket, syncAssignments as syncCanaryAssignments } from './utils/canaryBucket.js';
 import { fetchItemAggregate } from './services/aggregateService.js';
 import {
   toUiModel as toAggregateUiModel,
@@ -106,6 +106,23 @@ function getFetchWithRetryImpl() {
   return typeof override === 'function' ? override : fetchWithRetry;
 }
 
+function applyCanaryAssignments(meta, source = 'api-response') {
+  if (!meta || typeof meta !== 'object') {
+    return;
+  }
+  const payload = meta.canaryAssignments ?? meta.canaryAssignment ?? null;
+  if (!payload) {
+    return;
+  }
+  try {
+    syncCanaryAssignments(payload, { source });
+  } catch (err) {
+    if (typeof console !== 'undefined' && console && typeof console.warn === 'function') {
+      console.warn('No se pudieron sincronizar las asignaciones canary desde el backend', err);
+    }
+  }
+}
+
 function recordAggregateFallback(reason, meta = null, error = null, bucket = null) {
   const event = {
     reason: reason || 'unknown',
@@ -195,6 +212,7 @@ async function loadItemUsingAggregate(itemId, skeleton, currentToken, context = 
       || toAggregateUiModel({ data: response?.data, meta: response?.meta });
     if (response?.status === 304 && response.fromCache) {
       lastMeta = aggregateModel?.meta || response?.meta || null;
+      applyCanaryAssignments(lastMeta, 'aggregate-cache');
       window.hideSkeleton?.(skeleton);
       renderFreshnessBanner(aggregateModel?.meta);
       trackTelemetryEvent({
@@ -208,6 +226,7 @@ async function loadItemUsingAggregate(itemId, skeleton, currentToken, context = 
     stopPriceUpdaterIfNeeded();
     const { item, market, tree, meta, prices } = aggregateModel;
     lastMeta = meta || null;
+    applyCanaryAssignments(meta, 'aggregate');
     if (currentToken !== loadToken) return;
 
     if (!item) {
@@ -369,6 +388,7 @@ export async function loadItemLegacy(itemId, skeleton, currentToken, context = {
     }
 
     const { data, meta } = normalizeApiResponse(raw);
+    applyCanaryAssignments(meta, 'legacy');
     const legacyModel = toLegacyUiModel({ data, meta });
     trackTelemetryEvent({
       type: 'legacyLoad',

@@ -1,4 +1,8 @@
 const assert = require('assert');
+const { registerMockDeps } = require('../helpers/register-mock-deps.js');
+
+const restoreDeps = registerMockDeps();
+
 const api = require('../../backend/api/index.js');
 
 process.env.NODE_ENV = 'test';
@@ -43,6 +47,8 @@ async function withAggregateOverrides(overrides, fn) {
 
 async function run() {
   api.__setRecordAggregateMetric(async () => {});
+  api.__setCanaryAssignmentsFetcher(async () => ({ list: [], map: {}, raw: null }));
+  api.__setRedisClient({ isOpen: true });
   try {
     const snapshotAt = '2024-01-01T12:00:00.000Z';
     const state = {
@@ -139,12 +145,20 @@ async function run() {
     );
   } finally {
     api.__resetRecordAggregateMetric();
+    api.__resetCanaryAssignmentsFetcher();
+    api.__resetRedisClient();
   }
 
   console.log('tests/api/get-aggregate-conditional-cache.test.js passed');
 }
 
-run().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+run()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    if (typeof restoreDeps === 'function') {
+      restoreDeps();
+    }
+  });

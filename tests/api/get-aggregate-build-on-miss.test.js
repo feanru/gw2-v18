@@ -1,4 +1,8 @@
 const assert = require('assert');
+const { registerMockDeps } = require('../helpers/register-mock-deps.js');
+
+const restoreDeps = registerMockDeps();
+
 const api = require('../../backend/api/index.js');
 
 process.env.NODE_ENV = 'test';
@@ -43,6 +47,22 @@ async function withAggregateOverrides(overrides, fn) {
 
 async function run() {
   api.__setRecordAggregateMetric(async () => {});
+  api.__setCanaryAssignmentsFetcher(async () => ({
+    list: [
+      {
+        scope: 'feature:new-home',
+        bucket: 42,
+        assignedAt: '2024-01-01T00:00:00.000Z',
+        expiresAt: null,
+        source: 'redis',
+        feature: 'new-home',
+        screen: null,
+      },
+    ],
+    map: {},
+    raw: null,
+  }));
+  api.__setRedisClient({ isOpen: true });
   try {
     const state = {
       cached: null,
@@ -113,6 +133,17 @@ async function run() {
         assert.strictEqual(firstPayload.meta.snapshotAt, payload.meta.snapshotAt);
         assert.strictEqual(firstPayload.meta.source, 'aggregate');
         assert.strictEqual(firstPayload.meta.stale, false);
+        assert.deepStrictEqual(firstPayload.meta.canaryAssignments, [
+          {
+            scope: 'feature:new-home',
+            bucket: 42,
+            assignedAt: '2024-01-01T00:00:00.000Z',
+            expiresAt: null,
+            source: 'redis',
+            feature: 'new-home',
+            screen: null,
+          },
+        ]);
         assert.ok(Array.isArray(firstPayload.meta.warnings));
         assert.strictEqual(firstPayload.errors, undefined);
 
@@ -135,18 +166,37 @@ async function run() {
         assert.strictEqual(secondPayload.meta.snapshotAt, payload.meta.snapshotAt);
         assert.strictEqual(secondPayload.meta.source, 'aggregate');
         assert.strictEqual(secondPayload.meta.stale, false);
+        assert.deepStrictEqual(secondPayload.meta.canaryAssignments, [
+          {
+            scope: 'feature:new-home',
+            bucket: 42,
+            assignedAt: '2024-01-01T00:00:00.000Z',
+            expiresAt: null,
+            source: 'redis',
+            feature: 'new-home',
+            screen: null,
+          },
+        ]);
         assert.ok(Array.isArray(secondPayload.meta.warnings));
         assert.strictEqual(secondPayload.errors, undefined);
       },
     );
   } finally {
     api.__resetRecordAggregateMetric();
+    api.__resetCanaryAssignmentsFetcher();
+    api.__resetRedisClient();
   }
 
   console.log('tests/api/get-aggregate-build-on-miss.test.js passed');
 }
 
-run().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+run()
+  .catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    if (typeof restoreDeps === 'function') {
+      restoreDeps();
+    }
+  });

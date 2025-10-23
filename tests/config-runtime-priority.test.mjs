@@ -126,6 +126,46 @@ async function run() {
   resetFeatureFlags();
   assert.equal(isFeatureEnabled('usePrecomputed'), false);
 
+  resetWindow();
+  globalThis.window = {
+    __RUNTIME_CONFIG__: {
+      CANARY_ASSIGNMENTS: {
+        default: 8,
+        features: { usePrecomputed: 21 },
+        screens: { 'item-details': 17 },
+      },
+      CANARY_ROLLOUTS: {
+        default: 30,
+        features: { usePrecomputed: 12 },
+        screens: { 'item-details': 18 },
+      },
+    },
+  };
+  const canaryModule = await importFresh('../src/js/config.js', 'canary');
+  const canaryConfig = canaryModule.getConfig();
+  assert.equal(canaryConfig.CANARY_ASSIGNMENTS.default.bucket, 8);
+  assert.equal(
+    canaryConfig.CANARY_ASSIGNMENTS['feature:use-precomputed'].bucket,
+    21,
+    'Feature assignment from runtime config should be applied',
+  );
+  assert.equal(
+    canaryConfig.CANARY_ASSIGNMENTS['screen:item-details'].bucket,
+    17,
+    'Screen assignment from runtime config should be applied',
+  );
+  assert.equal(canaryConfig.CANARY_ROLLOUTS.default.threshold, 30);
+  assert.equal(
+    canaryConfig.CANARY_ROLLOUTS.features['use-precomputed'].threshold,
+    12,
+    'Feature rollout threshold should be normalized',
+  );
+  assert.equal(
+    canaryConfig.CANARY_ROLLOUTS.screens['item-details'].threshold,
+    18,
+    'Screen rollout threshold should be normalized',
+  );
+
   console.log('config runtime priority tests passed');
 }
 

@@ -1,3 +1,10 @@
+import {
+  syncAssignments as syncCanaryAssignments,
+  normalizeScopeKey as normalizeCanaryScopeKey,
+  MAX_BUCKET as CANARY_MAX_BUCKET,
+  DEFAULT_SCOPE as CANARY_DEFAULT_SCOPE,
+} from './utils/canaryBucket.js';
+
 const DEFAULT_CONFIG = {
   API_BASE_URL: '/api',
   CDN_BASE_URL: '',
@@ -16,6 +23,8 @@ const DEFAULT_CONFIG = {
   CONNECT_ALLOWLIST: [],
   FETCH_GUARD_REPORT_URL: null,
   FEATURE_ITEM_API_ROLLOUT: false,
+  CANARY_ASSIGNMENTS: {},
+  CANARY_ROLLOUTS: null,
 };
 
 function toBoolean(value, defaultValue = false) {
@@ -222,6 +231,204 @@ function applySource(target, source) {
       target.FETCH_GUARD_REPORT_URL = reportUrl;
     }
   }
+  if (Object.prototype.hasOwnProperty.call(source, 'CANARY_ASSIGNMENTS')) {
+    target.CANARY_ASSIGNMENTS = source.CANARY_ASSIGNMENTS;
+  }
+  if (Object.prototype.hasOwnProperty.call(source, 'CANARY_ROLLOUTS')) {
+    target.CANARY_ROLLOUTS = source.CANARY_ROLLOUTS;
+  } else if (Object.prototype.hasOwnProperty.call(source, 'CANARY_THRESHOLDS')) {
+    target.CANARY_ROLLOUTS = source.CANARY_THRESHOLDS;
+  }
+}
+
+function clampCanaryThreshold(value) {
+  if (value == null) {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  const rounded = Math.floor(numeric);
+  if (rounded < 0) {
+    return 0;
+  }
+  if (rounded > CANARY_MAX_BUCKET) {
+    return CANARY_MAX_BUCKET;
+  }
+  return rounded;
+}
+
+function cloneAssignments(assignments) {
+  const result = {};
+  if (!assignments || typeof assignments !== 'object') {
+    return result;
+  }
+  for (const [key, value] of Object.entries(assignments)) {
+    if (!key || !value || typeof value !== 'object') {
+      continue;
+    }
+    result[key] = { ...value };
+  }
+  return result;
+}
+
+function normalizeCanaryRollouts(rawValue, fallbackThreshold) {
+  const defaultThreshold = clampCanaryThreshold(
+    fallbackThreshold != null ? fallbackThreshold : DEFAULT_CONFIG.PRECOMPUTED_CANARY_THRESHOLD,
+  );
+  const baseDefault = {
+    scope: CANARY_DEFAULT_SCOPE,
+    threshold: defaultThreshold,
+  };
+  const normalized = {
+    default: { ...baseDefault },
+    features: {},
+    screens: {},
+    scopes: { [CANARY_DEFAULT_SCOPE]: { ...baseDefault } },
+  };
+
+  const assignDefault = (threshold) => {
+    const clamped = clampCanaryThreshold(threshold);
+    if (clamped == null) {
+      return;
+    }
+    normalized.default.threshold = clamped;
+    normalized.scopes[CANARY_DEFAULT_SCOPE] = {
+      scope: CANARY_DEFAULT_SCOPE,
+      threshold: clamped,
+    };
+  };
+
+  const assignFeature = (name, threshold) => {
+    const clamped = clampCanaryThreshold(threshold);
+    if (clamped == null) {
+      return;
+    }
+    const scope = normalizeCanaryScopeKey({ feature: name });
+    if (!scope || !scope.startsWith('feature:')) {
+      return;
+    }
+    const segment = scope.slice('feature:'.length);
+    const entry = {
+      scope,
+      threshold: clamped,
+      name: typeof name === 'string' && name ? name : segment,
+    };
+    normalized.features[segment] = entry;
+    normalized.scopes[scope] = entry;
+  };
+
+  const assignScreen = (name, threshold) => {
+    const clamped = clampCanaryThreshold(threshold);
+    if (clamped == null) {
+      return;
+    }
+    const scope = normalizeCanaryScopeKey({ screen: name });
+    if (!scope || !scope.startsWith('screen:')) {
+      return;
+    }
+    const segment = scope.slice('screen:'.length);
+    const entry = {
+      scope,
+      threshold: clamped,
+      name: typeof name === 'string' && name ? name : segment,
+    };
+    normalized.screens[segment] = entry;
+    normalized.scopes[scope] = entry;
+  };
+
+  const assignScope = (scopeName, threshold) => {
+    const clamped = clampCanaryThreshold(threshold);
+    if (clamped == null) {
+      return;
+    }
+    const scope = normalizeCanaryScopeKey(scopeName);
+    if (!scope) {
+      return;
+    }
+    if (scope === CANARY_DEFAULT_SCOPE) {
+      assignDefault(clamped);
+      return;
+    }
+    if (scope.startsWith('feature:')) {
+      assignFeature(scope.slice('feature:'.length), clamped);
+      return;
+    }
+    if (scope.startsWith('screen:')) {
+      assignScreen(scope.slice('screen:'.length), clamped);
+      return;
+    }
+    normalized.scopes[scope] = { scope, threshold: clamped };
+  };
+
+  const visit = (value) => {
+    if (value == null) {
+      return;
+    }
+    if (typeof value === 'number' || typeof value === 'string') {
+      assignDefault(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== 'object') {
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(value, 'default')) {
+      assignDefault(value.default);
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'features')) {
+      const features = value.features;
+      if (features && typeof features === 'object') {
+        for (const [featureName, threshold] of Object.entries(features)) {
+          if (threshold && typeof threshold === 'object' && !Array.isArray(threshold)) {
+            assignFeature(featureName, threshold.threshold ?? threshold.value ?? threshold.bucket ?? threshold.rollout);
+          } else {
+            assignFeature(featureName, threshold);
+          }
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'screens') || Object.prototype.hasOwnProperty.call(value, 'pages')) {
+      const screens = value.screens || value.pages;
+      if (screens && typeof screens === 'object') {
+        for (const [screenName, threshold] of Object.entries(screens)) {
+          if (threshold && typeof threshold === 'object' && !Array.isArray(threshold)) {
+            assignScreen(screenName, threshold.threshold ?? threshold.value ?? threshold.bucket ?? threshold.rollout);
+          } else {
+            assignScreen(screenName, threshold);
+          }
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'scopes')) {
+      const scopes = value.scopes;
+      if (scopes && typeof scopes === 'object') {
+        for (const [scopeName, threshold] of Object.entries(scopes)) {
+          if (threshold && typeof threshold === 'object' && !Array.isArray(threshold)) {
+            assignScope(scopeName, threshold.threshold ?? threshold.value ?? threshold.bucket ?? threshold.rollout);
+          } else {
+            assignScope(scopeName, threshold);
+          }
+        }
+      }
+    }
+
+    for (const [key, threshold] of Object.entries(value)) {
+      if (['default', 'features', 'screens', 'pages', 'scopes'].includes(key)) {
+        continue;
+      }
+      assignScope(key, threshold);
+    }
+  };
+
+  visit(rawValue);
+
+  return normalized;
 }
 
 function readWindow() {
@@ -308,6 +515,21 @@ export function getConfig() {
   base.LANG = base.DEFAULT_LANG || DEFAULT_CONFIG.DEFAULT_LANG;
   const normalizedActiveLang = String(base.LANG || '').trim().toLowerCase();
   base.FALLBACK_LANGS = base.FALLBACK_LANGS.filter((lang) => lang && lang !== normalizedActiveLang);
+
+  const syncedAssignments = syncCanaryAssignments(base.CANARY_ASSIGNMENTS, {
+    source: 'runtime-config',
+  });
+  base.CANARY_ASSIGNMENTS = cloneAssignments(syncedAssignments);
+  base.CANARY_ROLLOUTS = normalizeCanaryRollouts(base.CANARY_ROLLOUTS, base.PRECOMPUTED_CANARY_THRESHOLD);
+
+  if (!base.CANARY_ROLLOUTS.scopes[CANARY_DEFAULT_SCOPE]) {
+    const defaultEntry = {
+      scope: CANARY_DEFAULT_SCOPE,
+      threshold: base.PRECOMPUTED_CANARY_THRESHOLD,
+    };
+    base.CANARY_ROLLOUTS.scopes[CANARY_DEFAULT_SCOPE] = defaultEntry;
+    base.CANARY_ROLLOUTS.default = defaultEntry;
+  }
 
   emitRuntimeDebugLog({ debugMode, legacy, runtime, secureRuntime });
 
