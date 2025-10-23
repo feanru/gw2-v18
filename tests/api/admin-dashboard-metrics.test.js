@@ -10,7 +10,7 @@ const restoreDeps = registerMockDeps();
 const api = require('../../backend/api/index.js');
 const { createMetricsHandler } = require('../../backend/api/metrics.js');
 
-function createDbStub(statuses, metricsEntries = []) {
+function createDbStub(statuses, metricsEntries = [], webVitalEntries = []) {
   const statsMap = {
     items: { count: 120, storageSize: 4096, totalIndexSize: 4096, indexSizes: { itemIndex: 4096 } },
     prices: { count: 80, storageSize: 2048, totalIndexSize: 512 },
@@ -40,6 +40,11 @@ function createDbStub(statuses, metricsEntries = []) {
     apiMetrics: createCollection('apiMetrics', {
       find: () => ({
         toArray: async () => metricsEntries,
+      }),
+    }),
+    webVitals: createCollection('webVitals', {
+      find: () => ({
+        toArray: async () => webVitalEntries,
       }),
     }),
     syncStatus: {
@@ -87,33 +92,67 @@ async function run() {
 
   const metricsEntries = [
     {
+      endpoint: 'aggregate',
       stale: false,
       durationMs: 120,
       statusCode: 200,
       ttfbMs: 60,
       responseBytes: 4096,
+      cacheHit: true,
       createdAt: new Date(now - 2 * 60 * 1000),
     },
     {
+      endpoint: 'aggregate',
       stale: true,
       durationMs: 240,
       statusCode: 200,
       ttfbMs: 110,
       responseBytes: 8192,
+      cacheMiss: true,
       createdAt: new Date(now - 60 * 1000),
     },
     {
+      endpoint: 'aggregate',
       stale: false,
       durationMs: 180,
       statusCode: 304,
       ttfbMs: 80,
       responseBytes: 2048,
+      cacheHit: true,
       createdAt: new Date(now - 30 * 1000),
+    },
+    {
+      endpoint: 'item-fallback',
+      stale: false,
+      durationMs: 90,
+      statusCode: 200,
+      createdAt: new Date(now - 45 * 1000),
+    },
+  ];
+
+  const webVitalEntries = [
+    {
+      metric: 'LCP',
+      value: 2100,
+      rating: 'good',
+      createdAt: new Date(now - 20 * 1000),
+    },
+    {
+      metric: 'CLS',
+      value: 0.05,
+      rating: 'good',
+      createdAt: new Date(now - 18 * 1000),
+    },
+    {
+      metric: 'INP',
+      value: 180,
+      rating: 'needsImprovement',
+      createdAt: new Date(now - 15 * 1000),
     },
   ];
 
   const clientStub = {
-    db: () => createDbStub(statuses, metricsEntries),
+    db: () => createDbStub(statuses, metricsEntries, webVitalEntries),
   };
 
   api.__setMongoClient(clientStub);
@@ -176,6 +215,17 @@ async function run() {
 
     assert.ok(snapshot.mongo, 'mongo section should exist');
     assert.strictEqual(snapshot.mongo.indexStats.items.exceeded, true);
+    assert.ok(snapshot.endpoints, 'endpoint metrics should exist');
+    assert.strictEqual(snapshot.endpoints.aggregate.responses.total, 3);
+    assert.ok(
+      snapshot.endpoints['item-fallback'],
+      'item-fallback endpoint metrics should be present even with few samples',
+    );
+    assert.ok(snapshot.webVitals.metrics.LCP, 'LCP metric should be summarized in webVitals');
+    assert.ok(
+      snapshot.webVitals.metrics.CLS.goodPercentage >= 0,
+      'CLS metric should expose goodPercentage',
+    );
 
     const metricsHandler = createMetricsHandler({
       buildDashboardSnapshot: async () => snapshot,
@@ -247,6 +297,18 @@ async function run() {
     assert.ok(
       metricsRes.body.includes('gw2_api_bytes_per_visit'),
       'metrics payload should include bytes per visit metric',
+    );
+    assert.ok(
+      metricsRes.body.includes('gw2_api_endpoint_latency_p95_ms{endpoint="aggregate"}'),
+      'metrics payload should include per-endpoint latency metric',
+    );
+    assert.ok(
+      metricsRes.body.includes('gw2_api_endpoint_cache_hit_percentage{endpoint="aggregate"}'),
+      'metrics payload should include per-endpoint cache percentage',
+    );
+    assert.ok(
+      metricsRes.body.includes('gw2_web_vital_samples_total{metric="LCP"}'),
+      'metrics payload should include Core Web Vitals samples',
     );
     const bytesPerVisitLine = metricsRes.body
       .split('\n')

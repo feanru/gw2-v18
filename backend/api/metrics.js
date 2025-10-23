@@ -366,6 +366,126 @@ function createMetricsHandler({
         );
       }
 
+      const endpoints = snapshot.endpoints || {};
+      for (const [endpointName, endpointStats] of Object.entries(endpoints)) {
+        const labels = { endpoint: endpointName };
+        const endpointResponses = endpointStats.responses || {};
+        if (Number.isFinite(endpointResponses.total)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_responses_total', endpointResponses.total, {
+              help: 'Total responses recorded for the endpoint in the current window',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointResponses.stalePercentage)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_stale_percentage', endpointResponses.stalePercentage, {
+              help: 'Percentage of responses served from stale cache for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointResponses.errorPercentage)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_error_percentage', endpointResponses.errorPercentage, {
+              help: 'Percentage of responses classified as errors (HTTP 5xx) for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+
+        const endpointLatency = endpointStats.latency || {};
+        if (Number.isFinite(endpointLatency.p50)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_latency_p50_ms', endpointLatency.p50, {
+              help: 'p50 latency per endpoint in milliseconds',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointLatency.p95)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_latency_p95_ms', endpointLatency.p95, {
+              help: 'p95 latency per endpoint in milliseconds',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointLatency.p99)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_latency_p99_ms', endpointLatency.p99, {
+              help: 'p99 latency per endpoint in milliseconds',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+
+        const endpointPayload = endpointStats.payload || {};
+        if (Number.isFinite(endpointPayload.averageBytes)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_payload_average_bytes', endpointPayload.averageBytes, {
+              help: 'Average payload bytes per response for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointPayload.p95Bytes)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_payload_p95_bytes', endpointPayload.p95Bytes, {
+              help: 'p95 payload size in bytes for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointPayload.p99Bytes)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_payload_p99_bytes', endpointPayload.p99Bytes, {
+              help: 'p99 payload size in bytes for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointPayload.bytesPerVisit)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_bytes_per_visit', endpointPayload.bytesPerVisit, {
+              help: 'Average payload bytes per visit for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+
+        const endpointCache = endpointStats.cache || {};
+        if (Number.isFinite(endpointCache.hitPercentage)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_cache_hit_percentage', endpointCache.hitPercentage, {
+              help: 'Cache hit percentage for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+        if (Number.isFinite(endpointCache.stalePercentage)) {
+          lines.push(
+            formatMetric('gw2_api_endpoint_cache_stale_percentage', endpointCache.stalePercentage, {
+              help: 'Percentage of responses served stale for the endpoint',
+              type: 'gauge',
+              labels,
+            }),
+          );
+        }
+      }
+
       const jsErrors = snapshot.jsErrors || {};
       if (Number.isFinite(jsErrors.count)) {
         lines.push(
@@ -411,6 +531,75 @@ function createMetricsHandler({
               help: 'Ingestion failures in the last 24h by collection',
               type: 'gauge',
               labels: { collection },
+            }),
+          );
+        }
+      }
+
+      const webVitals = snapshot.webVitals || {};
+      const vitalsMetrics = webVitals.metrics || {};
+      for (const [metricName, metricStats] of Object.entries(vitalsMetrics)) {
+        const metricLabels = { metric: metricName };
+        if (Number.isFinite(metricStats.count)) {
+          lines.push(
+            formatMetric('gw2_web_vital_samples_total', metricStats.count, {
+              help: 'Total Core Web Vital samples recorded in the window',
+              type: 'gauge',
+              labels: metricLabels,
+            }),
+          );
+        }
+        if (Number.isFinite(metricStats.average)) {
+          lines.push(
+            formatMetric('gw2_web_vital_average', metricStats.average, {
+              help: 'Average Core Web Vital value in the window',
+              type: 'gauge',
+              labels: metricLabels,
+            }),
+          );
+        }
+        if (Number.isFinite(metricStats.p50)) {
+          lines.push(
+            formatMetric('gw2_web_vital_value', metricStats.p50, {
+              help: 'p50 Core Web Vital value in the window',
+              type: 'gauge',
+              labels: { ...metricLabels, stat: 'p50' },
+            }),
+          );
+        }
+        if (Number.isFinite(metricStats.p75)) {
+          lines.push(
+            formatMetric('gw2_web_vital_value', metricStats.p75, {
+              help: 'p75 Core Web Vital value in the window',
+              type: 'gauge',
+              labels: { ...metricLabels, stat: 'p75' },
+            }),
+          );
+        }
+        if (Number.isFinite(metricStats.p95)) {
+          lines.push(
+            formatMetric('gw2_web_vital_value', metricStats.p95, {
+              help: 'p95 Core Web Vital value in the window',
+              type: 'gauge',
+              labels: { ...metricLabels, stat: 'p95' },
+            }),
+          );
+        }
+        if (Number.isFinite(metricStats.p99)) {
+          lines.push(
+            formatMetric('gw2_web_vital_value', metricStats.p99, {
+              help: 'p99 Core Web Vital value in the window',
+              type: 'gauge',
+              labels: { ...metricLabels, stat: 'p99' },
+            }),
+          );
+        }
+        if (Number.isFinite(metricStats.goodPercentage)) {
+          lines.push(
+            formatMetric('gw2_web_vital_good_percentage', metricStats.goodPercentage, {
+              help: 'Percentage of samples rated as good for the Core Web Vital metric',
+              type: 'gauge',
+              labels: metricLabels,
             }),
           );
         }

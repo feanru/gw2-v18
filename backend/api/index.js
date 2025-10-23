@@ -37,6 +37,19 @@ const MONITORED_COLLECTIONS = ['items', 'prices', 'recipes'];
 const JS_ERROR_COLLECTION = 'jsErrors';
 const JS_ERROR_STATS_COLLECTION = 'jsErrorStats';
 const JS_ERROR_REDIS_KEY = 'telemetry:jsErrors';
+const WEB_VITALS_COLLECTION = 'webVitals';
+const RAW_WEB_VITALS_WINDOW_MINUTES = Number.parseFloat(
+  process.env.ADMIN_WEB_VITALS_WINDOW_MINUTES || `${DASHBOARD_WINDOW_MINUTES}`,
+);
+const WEB_VITALS_WINDOW_MINUTES =
+  Number.isFinite(RAW_WEB_VITALS_WINDOW_MINUTES) && RAW_WEB_VITALS_WINDOW_MINUTES > 0
+    ? RAW_WEB_VITALS_WINDOW_MINUTES
+    : DASHBOARD_WINDOW_MS / 60000;
+const WEB_VITALS_WINDOW_MS = Math.max(WEB_VITALS_WINDOW_MINUTES * 60 * 1000, 60_000);
+const WEB_VITALS_BODY_LIMIT_BYTES = Math.max(
+  Number.parseInt(process.env.ADMIN_WEB_VITALS_MAX_BYTES || '8192', 10) || 0,
+  1024,
+);
 
 const JS_ERROR_BODY_LIMIT_BYTES = Math.max(
   Number.parseInt(process.env.ADMIN_JS_ERROR_MAX_BYTES || '16384', 10) || 0,
@@ -2542,6 +2555,122 @@ function sanitizeJsErrorPayload(payload, context = {}) {
   };
 }
 
+function sanitizeWebVitalMeta(meta) {
+  if (!meta || typeof meta !== 'object') {
+    return null;
+  }
+  const entries = Object.entries(meta);
+  if (!entries.length) {
+    return null;
+  }
+  const result = {};
+  let count = 0;
+  for (const [rawKey, rawValue] of entries) {
+    if (count >= 10) {
+      break;
+    }
+    const key = clampString(rawKey, 48);
+    if (!key) {
+      continue;
+    }
+    if (rawValue == null) {
+      continue;
+    }
+    if (typeof rawValue === 'string') {
+      const normalizedValue = clampString(rawValue, 256);
+      if (normalizedValue != null) {
+        result[key] = normalizedValue;
+        count += 1;
+      }
+      continue;
+    }
+    if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+      result[key] = rawValue;
+      count += 1;
+      continue;
+    }
+    if (typeof rawValue === 'boolean') {
+      result[key] = rawValue;
+      count += 1;
+      continue;
+    }
+    try {
+      const serialized = clampString(JSON.stringify(rawValue), 256);
+      if (serialized != null) {
+        result[key] = serialized;
+        count += 1;
+      }
+    } catch (err) {
+      // ignore serialization errors
+    }
+  }
+  return count > 0 ? result : null;
+}
+
+function sanitizeWebVitalPayload(payload, context = {}) {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+
+  const metricName = clampString(payload.metric || payload.name, 48);
+  const value = Number(payload.value);
+  if (!metricName || !Number.isFinite(value)) {
+    return null;
+  }
+
+  const now = context.now instanceof Date ? context.now : new Date();
+
+  let occurredAt = null;
+  if (payload.timestamp || payload.occurredAt) {
+    const ts = new Date(payload.timestamp || payload.occurredAt);
+    if (!Number.isNaN(ts.getTime())) {
+      occurredAt = ts;
+    }
+  }
+  if (!(occurredAt instanceof Date) || Number.isNaN(occurredAt.getTime())) {
+    occurredAt = now;
+  }
+
+  const baseMeta = sanitizeWebVitalMeta(payload.meta || null);
+  const attributionMeta = sanitizeWebVitalMeta(payload.attribution || null);
+  const meta = baseMeta || attributionMeta
+    ? {
+        ...(baseMeta || {}),
+        ...(attributionMeta ? { attribution: attributionMeta } : {}),
+      }
+    : null;
+
+  const lang = clampString(payload.lang || context.lang, 16);
+  const page = clampString(payload.page || payload.url || payload.location, 512);
+  const visibility = clampString(payload.visibilityState || payload.visibility, 16);
+  const navigationType = clampString(payload.navigationType, 32);
+  const sessionId = clampString(payload.sessionId || payload.session, 64);
+  const connection = clampString(payload.connection, 32);
+  const deviceMemory = Number.isFinite(payload.deviceMemory) ? Number(payload.deviceMemory) : null;
+
+  return {
+    metric: metricName,
+    value,
+    rating: clampString(payload.rating, 16),
+    delta: Number.isFinite(payload.delta) ? Number(payload.delta) : null,
+    id: clampString(payload.id, 128),
+    navigationType: navigationType || null,
+    visibilityState: visibility || null,
+    page: page || null,
+    lang: lang || null,
+    sessionId: sessionId || null,
+    connection: connection || null,
+    deviceMemory,
+    isFinal: Boolean(payload.isFinal),
+    occurredAt,
+    receivedAt: now,
+    meta,
+    userAgent: clampString(context.userAgent, 256),
+    referer: clampString(context.referer, JS_ERROR_MAX_URL_LENGTH),
+    ip: clampString(context.ip, 64),
+  };
+}
+
 async function recordJsErrorFrequency(timestamp, fingerprint) {
   const redis = await getRedisClient();
   if (!redis) {
@@ -2758,6 +2887,137 @@ const defaultRecordJsErrorEvent = recordJsErrorEventDefault;
 let recordJsErrorEventFn = defaultRecordJsErrorEvent;
 const defaultCollectJsErrorMetrics = collectJsErrorMetricsDefault;
 let collectJsErrorMetricsFn = defaultCollectJsErrorMetrics;
+
+async function recordWebVitalEventDefault(event) {
+  if (!event || typeof event !== 'object' || !event.metric) {
+    return;
+  }
+
+  const client = await getMongoClient();
+  const db = client.db();
+  const payload = {
+    metric: event.metric,
+    value: Number(event.value),
+    rating: event.rating || null,
+    delta: Number.isFinite(event.delta) ? Number(event.delta) : null,
+    id: event.id || null,
+    navigationType: event.navigationType || null,
+    visibilityState: event.visibilityState || null,
+    page: event.page || null,
+    lang: event.lang || null,
+    sessionId: event.sessionId || null,
+    connection: event.connection || null,
+    deviceMemory: Number.isFinite(event.deviceMemory) ? Number(event.deviceMemory) : null,
+    isFinal: Boolean(event.isFinal),
+    occurredAt: event.occurredAt instanceof Date ? event.occurredAt : new Date(),
+    receivedAt: event.receivedAt instanceof Date ? event.receivedAt : new Date(),
+    createdAt: new Date(),
+    meta: event.meta || null,
+    userAgent: event.userAgent || null,
+    referer: event.referer || null,
+    ip: event.ip || null,
+  };
+
+  try {
+    await db.collection(WEB_VITALS_COLLECTION).insertOne(payload);
+  } catch (err) {
+    if (!isNamespaceNotFoundError(err)) {
+      throw err;
+    }
+  }
+}
+
+async function collectWebVitalMetricsDefault(db, windowStart, nowTs) {
+  const windowStartDate = windowStart instanceof Date ? windowStart : new Date(windowStart);
+  const cutoff = Number.isNaN(windowStartDate.getTime())
+    ? new Date(Date.now() - WEB_VITALS_WINDOW_MS)
+    : windowStartDate;
+
+  let entries = [];
+  try {
+    const cursor = db.collection(WEB_VITALS_COLLECTION).find(
+      { createdAt: { $gte: cutoff } },
+      {
+        projection: {
+          _id: 0,
+          metric: 1,
+          value: 1,
+          rating: 1,
+        },
+      },
+    );
+    entries = await cursor.toArray();
+  } catch (err) {
+    if (!isNamespaceNotFoundError(err)) {
+      throw err;
+    }
+  }
+
+  const metricsMap = new Map();
+  let totalSamples = 0;
+  for (const entry of entries) {
+    const key = clampString(entry?.metric, 48);
+    const value = Number(entry?.value);
+    if (!key || !Number.isFinite(value)) {
+      continue;
+    }
+    totalSamples += 1;
+    let bucket = metricsMap.get(key);
+    if (!bucket) {
+      bucket = {
+        values: [],
+        sum: 0,
+        ratings: { good: 0, needs_improvement: 0, poor: 0 },
+      };
+      metricsMap.set(key, bucket);
+    }
+    bucket.values.push(value);
+    bucket.sum += value;
+    const rating = typeof entry.rating === 'string' ? entry.rating.toLowerCase().replace(/\s+/g, '_') : '';
+    if (bucket.ratings[rating] != null) {
+      bucket.ratings[rating] += 1;
+    }
+  }
+
+  const metrics = {};
+  for (const [metricName, bucket] of metricsMap.entries()) {
+    const sorted = bucket.values.sort((a, b) => a - b);
+    const count = sorted.length;
+    const average = count > 0 ? bucket.sum / count : null;
+    const p50 = computePercentile(sorted, 0.5);
+    const p75 = computePercentile(sorted, 0.75);
+    const p95 = computePercentile(sorted, 0.95);
+    const p99 = computePercentile(sorted, 0.99);
+    const goodCount = bucket.ratings.good || 0;
+    const goodPercentage = count > 0 ? (goodCount / count) * 100 : null;
+
+    metrics[metricName] = {
+      count,
+      average,
+      p50,
+      p75,
+      p95,
+      p99,
+      goodCount,
+      goodPercentage,
+    };
+  }
+
+  const windowMinutes = WEB_VITALS_WINDOW_MS / 60000;
+  const referenceTs = Number.isFinite(nowTs) ? nowTs : Date.now();
+
+  return {
+    windowMinutes,
+    sampleCount: totalSamples,
+    generatedAt: new Date(referenceTs).toISOString(),
+    metrics,
+  };
+}
+
+const defaultRecordWebVitalEvent = recordWebVitalEventDefault;
+let recordWebVitalEventFn = defaultRecordWebVitalEvent;
+const defaultCollectWebVitalMetrics = collectWebVitalMetricsDefault;
+let collectWebVitalMetricsFn = defaultCollectWebVitalMetrics;
 
 function createAlertKey(alert) {
   if (!alert || !alert.type) {
@@ -3041,57 +3301,191 @@ async function buildDashboardSnapshot() {
     .collection(METRICS_COLLECTION)
     .find(
       {
-        endpoint: 'aggregate',
         createdAt: { $gte: metricsSince },
       },
       {
         projection: {
+          endpoint: 1,
           stale: 1,
           durationMs: 1,
           statusCode: 1,
           ttfbMs: 1,
           responseBytes: 1,
+          cacheHit: 1,
+          cacheMiss: 1,
+          cacheStale: 1,
           _id: 0,
         },
       },
     );
   const metrics = await metricsCursor.toArray();
-  const totalResponses = metrics.length;
-  const staleResponses = metrics.reduce((acc, entry) => (entry && entry.stale ? acc + 1 : acc), 0);
-  const notModifiedResponses = metrics.reduce(
-    (acc, entry) => (entry && Number(entry.statusCode) === 304 ? acc + 1 : acc),
-    0,
-  );
-  const durations = metrics
-    .map((entry) => (entry && Number.isFinite(entry.durationMs) ? Number(entry.durationMs) : null))
-    .filter((value) => value !== null)
-    .sort((a, b) => a - b);
-  const ttfbValues = metrics
-    .map((entry) => (entry && Number.isFinite(entry.ttfbMs) ? Number(entry.ttfbMs) : null))
-    .filter((value) => value !== null)
-    .sort((a, b) => a - b);
-  const payloadSizes = metrics
-    .map((entry) => (entry && Number.isFinite(entry.responseBytes) ? Number(entry.responseBytes) : null))
-    .filter((value) => value !== null)
-    .sort((a, b) => a - b);
-  const payloadTotalBytes = metrics.reduce((acc, entry) => {
-    if (!entry || !Number.isFinite(entry.responseBytes)) {
-      return acc;
+
+  const endpointAccumulators = new Map();
+  const ensureAccumulator = (endpointName) => {
+    const key = endpointName ? String(endpointName) : 'unknown';
+    if (!endpointAccumulators.has(key)) {
+      endpointAccumulators.set(key, {
+        responses: { total: 0, stale: 0, notModified: 0, errors: 0 },
+        latency: { values: [], sum: 0, count: 0 },
+        ttfb: { values: [], sum: 0, count: 0 },
+        payload: { values: [], totalBytes: 0, count: 0 },
+        cache: { hit: 0, miss: 0, stale: 0 },
+      });
     }
-    return acc + Number(entry.responseBytes);
-  }, 0);
-  const p95 = computePercentile(durations, 0.95);
-  const p99 = computePercentile(durations, 0.99);
-  const p50 = computePercentile(durations, 0.5);
-  const ttfbP95 = computePercentile(ttfbValues, 0.95);
-  const ttfbP99 = computePercentile(ttfbValues, 0.99);
-  const ttfbP50 = computePercentile(ttfbValues, 0.5);
-  const payloadP95 = computePercentile(payloadSizes, 0.95);
-  const payloadP99 = computePercentile(payloadSizes, 0.99);
-  const payloadP50 = computePercentile(payloadSizes, 0.5);
-  const ttfbAverage = computeAverage(ttfbValues);
-  const payloadAverage = computeAverage(payloadSizes);
-  const bytesPerVisit = totalResponses > 0 ? payloadTotalBytes / totalResponses : null;
+    return endpointAccumulators.get(key);
+  };
+
+  for (const entry of metrics) {
+    const accumulator = ensureAccumulator(entry?.endpoint || 'aggregate');
+    accumulator.responses.total += 1;
+    if (entry?.stale) {
+      accumulator.responses.stale += 1;
+    }
+
+    const statusCode = Number(entry?.statusCode);
+    if (Number.isFinite(statusCode)) {
+      if (statusCode === 304) {
+        accumulator.responses.notModified += 1;
+      } else if (statusCode >= 500) {
+        accumulator.responses.errors += 1;
+      }
+    }
+
+    const duration = Number(entry?.durationMs);
+    if (Number.isFinite(duration) && duration >= 0) {
+      accumulator.latency.values.push(duration);
+      accumulator.latency.sum += duration;
+      accumulator.latency.count += 1;
+    }
+
+    const ttfbValue = Number(entry?.ttfbMs);
+    if (Number.isFinite(ttfbValue) && ttfbValue >= 0) {
+      accumulator.ttfb.values.push(ttfbValue);
+      accumulator.ttfb.sum += ttfbValue;
+      accumulator.ttfb.count += 1;
+    }
+
+    const payloadBytes = Number(entry?.responseBytes);
+    if (Number.isFinite(payloadBytes) && payloadBytes >= 0) {
+      accumulator.payload.values.push(payloadBytes);
+      accumulator.payload.totalBytes += payloadBytes;
+      accumulator.payload.count += 1;
+    }
+
+    if (entry?.cacheHit === true) {
+      accumulator.cache.hit += 1;
+    } else if (entry?.cacheMiss === true) {
+      accumulator.cache.miss += 1;
+    }
+    if (entry?.cacheStale === true) {
+      accumulator.cache.stale += 1;
+    }
+  }
+
+  if (!endpointAccumulators.has('aggregate')) {
+    endpointAccumulators.set('aggregate', {
+      responses: { total: 0, stale: 0, notModified: 0, errors: 0 },
+      latency: { values: [], sum: 0, count: 0 },
+      ttfb: { values: [], sum: 0, count: 0 },
+      payload: { values: [], totalBytes: 0, count: 0 },
+      cache: { hit: 0, miss: 0, stale: 0 },
+    });
+  }
+
+  const endpointSummaries = {};
+  for (const [endpointName, accumulator] of endpointAccumulators.entries()) {
+    const total = accumulator.responses.total;
+    const staleCount = accumulator.responses.stale;
+    const notModified = accumulator.responses.notModified;
+    const errorCount = accumulator.responses.errors;
+
+    const staleRatio = total > 0 ? staleCount / total : 0;
+    const notModifiedRatio = total > 0 ? notModified / total : 0;
+    const errorRatio = total > 0 ? errorCount / total : 0;
+
+    const latencyValues = [...accumulator.latency.values].sort((a, b) => a - b);
+    const ttfbValues = [...accumulator.ttfb.values].sort((a, b) => a - b);
+    const payloadValues = [...accumulator.payload.values].sort((a, b) => a - b);
+
+    const latencyAverage =
+      accumulator.latency.count > 0 ? accumulator.latency.sum / accumulator.latency.count : null;
+    const ttfbAverage = accumulator.ttfb.count > 0 ? accumulator.ttfb.sum / accumulator.ttfb.count : null;
+    const payloadAverage =
+      accumulator.payload.count > 0 ? accumulator.payload.totalBytes / accumulator.payload.count : null;
+
+    const bytesPerVisit = total > 0 ? accumulator.payload.totalBytes / total : null;
+
+    const cacheLookups = accumulator.cache.hit + accumulator.cache.miss;
+    const cacheHitRatio = cacheLookups > 0 ? accumulator.cache.hit / cacheLookups : null;
+
+    endpointSummaries[endpointName] = {
+      responses: {
+        total,
+        stale: staleCount,
+        notModified,
+        errors: errorCount,
+        ratio: staleRatio,
+        stalePercentage: staleRatio * 100,
+        notModifiedRatio,
+        notModifiedPercentage: notModifiedRatio * 100,
+        errorRatio,
+        errorPercentage: errorRatio * 100,
+      },
+      latency: {
+        average: latencyAverage,
+        p50: computePercentile(latencyValues, 0.5),
+        p95: computePercentile(latencyValues, 0.95),
+        p99: computePercentile(latencyValues, 0.99),
+        sampleCount: latencyValues.length,
+      },
+      ttfb: {
+        average: ttfbAverage,
+        p50: computePercentile(ttfbValues, 0.5),
+        p95: computePercentile(ttfbValues, 0.95),
+        p99: computePercentile(ttfbValues, 0.99),
+        sampleCount: ttfbValues.length,
+      },
+      payload: {
+        averageBytes: payloadAverage,
+        p50Bytes: computePercentile(payloadValues, 0.5),
+        p95Bytes: computePercentile(payloadValues, 0.95),
+        p99Bytes: computePercentile(payloadValues, 0.99),
+        sampleCount: payloadValues.length,
+        totalBytes: accumulator.payload.totalBytes,
+        bytesPerVisit,
+      },
+      cache: {
+        hit: accumulator.cache.hit,
+        miss: accumulator.cache.miss,
+        stale: accumulator.cache.stale,
+        lookups: cacheLookups,
+        hitRatio: cacheHitRatio,
+        hitPercentage: cacheHitRatio != null ? cacheHitRatio * 100 : null,
+        stalePercentage: total > 0 ? (accumulator.cache.stale / total) * 100 : null,
+      },
+    };
+  }
+
+  const aggregateSummary = endpointSummaries.aggregate;
+  const totalResponses = aggregateSummary.responses.total;
+  const staleResponses = aggregateSummary.responses.stale;
+  const notModifiedResponses = aggregateSummary.responses.notModified;
+  const staleRatio = aggregateSummary.responses.ratio;
+  const stalePercentage = aggregateSummary.responses.stalePercentage;
+  const notModifiedRatio = aggregateSummary.responses.notModifiedRatio;
+  const bytesPerVisit = aggregateSummary.payload.bytesPerVisit;
+  const payloadTotalBytes = aggregateSummary.payload.totalBytes;
+  const p50 = aggregateSummary.latency.p50;
+  const p95 = aggregateSummary.latency.p95;
+  const p99 = aggregateSummary.latency.p99;
+  const ttfbP50 = aggregateSummary.ttfb.p50;
+  const ttfbP95 = aggregateSummary.ttfb.p95;
+  const ttfbP99 = aggregateSummary.ttfb.p99;
+  const ttfbAverage = aggregateSummary.ttfb.average;
+  const payloadP50 = aggregateSummary.payload.p50Bytes;
+  const payloadP95 = aggregateSummary.payload.p95Bytes;
+  const payloadP99 = aggregateSummary.payload.p99Bytes;
+  const payloadAverage = aggregateSummary.payload.averageBytes;
 
   const statusRecords = await db
     .collection(SYNC_STATUS_COLLECTION)
@@ -3140,9 +3534,6 @@ async function buildDashboardSnapshot() {
     }
   }
 
-  const staleRatio = totalResponses > 0 ? staleResponses / totalResponses : null;
-  const stalePercentage = staleRatio != null ? staleRatio * 100 : null;
-  const notModifiedRatio = totalResponses > 0 ? notModifiedResponses / totalResponses : null;
   if (staleRatio !== null && staleRatio > 0.1) {
     registerAlert({
       type: 'stale-responses',
@@ -3216,6 +3607,22 @@ async function buildDashboardSnapshot() {
     });
   }
 
+  let webVitals = null;
+  try {
+    webVitals = await collectWebVitalMetricsFn(db, new Date(now - WEB_VITALS_WINDOW_MS), now);
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(`[admin] failed to collect web vital metrics: ${err.message}`);
+    }
+  }
+
+  const normalizedWebVitals = {
+    windowMinutes: WEB_VITALS_WINDOW_MS / 60000,
+    sampleCount: 0,
+    metrics: {},
+    ...(webVitals && typeof webVitals === 'object' ? webVitals : {}),
+  };
+
   await Promise.allSettled(alertPromises);
 
   let rawIndexStats = {};
@@ -3263,6 +3670,7 @@ async function buildDashboardSnapshot() {
     generatedAt: new Date().toISOString(),
     windowMinutes: Math.round(DASHBOARD_WINDOW_MS / 60000),
     freshness,
+    endpoints: endpointSummaries,
     responses: {
       total: totalResponses,
       stale: staleResponses,
@@ -3273,24 +3681,25 @@ async function buildDashboardSnapshot() {
       bytesPerVisit,
     },
     latency: {
+      average: aggregateSummary.latency.average,
       p50,
       p95,
       p99,
-      sampleCount: durations.length,
+      sampleCount: aggregateSummary.latency.sampleCount,
     },
     ttfb: {
       average: ttfbAverage,
       p50: ttfbP50,
       p95: ttfbP95,
       p99: ttfbP99,
-      sampleCount: ttfbValues.length,
+      sampleCount: aggregateSummary.ttfb.sampleCount,
     },
     payload: {
       averageBytes: payloadAverage,
       p50Bytes: payloadP50,
       p95Bytes: payloadP95,
       p99Bytes: payloadP99,
-      sampleCount: payloadSizes.length,
+      sampleCount: aggregateSummary.payload.sampleCount,
       totalBytes: payloadTotalBytes,
       bytesPerVisit,
     },
@@ -3300,6 +3709,7 @@ async function buildDashboardSnapshot() {
       windowHours: 24,
     },
     jsErrors: normalizedJsErrors,
+    webVitals: normalizedWebVitals,
     mongo: {
       indexStats: normalizedIndexStats,
       indexSizeAlertThreshold: ADMIN_INDEX_SIZE_ALERT_BYTES > 0 ? ADMIN_INDEX_SIZE_ALERT_BYTES : null,
@@ -3458,6 +3868,113 @@ async function handleTelemetryJsError(req, res) {
       console.error(`[telemetry] failed to persist js error: ${err.message}`);
     }
     fail(res, 500, 'errorTelemetryStorage', 'No se pudo registrar el evento de error', {
+      source: 'telemetry',
+      stale: true,
+      lang: DEFAULT_LANG,
+    });
+    return;
+  }
+
+  ok(
+    res,
+    { accepted: sanitized.length },
+    {
+      source: 'telemetry',
+      stale: false,
+      lang: DEFAULT_LANG,
+      lastUpdated: context.now.toISOString(),
+    },
+    { statusCode: 202 },
+  );
+}
+
+async function handleTelemetryWebVital(req, res) {
+  let body;
+  try {
+    body = await parseJsonBody(req, { maxBytes: WEB_VITALS_BODY_LIMIT_BYTES });
+  } catch (err) {
+    if (err && err.message === 'PayloadTooLarge') {
+      fail(res, 413, 'errorPayloadTooLarge', 'Payload exceeds allowed limit', {
+        source: 'telemetry',
+        stale: false,
+        lang: DEFAULT_LANG,
+      });
+      return;
+    }
+    fail(res, 400, 'errorInvalidJson', 'Invalid JSON payload', {
+      source: 'telemetry',
+      stale: false,
+      lang: DEFAULT_LANG,
+    });
+    return;
+  }
+
+  if (!body) {
+    fail(res, 400, 'errorInvalidPayload', 'Payload must be a JSON object', {
+      source: 'telemetry',
+      stale: false,
+      lang: DEFAULT_LANG,
+    });
+    return;
+  }
+
+  const userAgentHeader = req.headers?.['user-agent'];
+  const refererHeader = req.headers?.referer || req.headers?.referrer;
+  const forwardedFor = req.headers?.['x-forwarded-for'];
+  let ip = null;
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    ip = forwardedFor.split(',')[0].trim();
+  }
+  if (!ip && req.socket && req.socket.remoteAddress) {
+    ip = req.socket.remoteAddress;
+  }
+  const acceptLanguageHeader = req.headers?.['accept-language'];
+  let contextLang = null;
+  if (typeof acceptLanguageHeader === 'string' && acceptLanguageHeader.trim()) {
+    contextLang = acceptLanguageHeader.split(',')[0].split(';')[0].trim();
+  }
+
+  const context = {
+    userAgent: typeof userAgentHeader === 'string' ? userAgentHeader : null,
+    referer: typeof refererHeader === 'string' ? refererHeader : null,
+    ip: ip || null,
+    now: new Date(),
+    lang: contextLang,
+  };
+
+  const payloads = Array.isArray(body)
+    ? body
+    : Array.isArray(body.metrics)
+      ? body.metrics
+      : [body];
+
+  const sanitized = [];
+  for (const entry of payloads) {
+    const event = sanitizeWebVitalPayload(entry, context);
+    if (event) {
+      sanitized.push(event);
+    }
+  }
+
+  if (!sanitized.length) {
+    fail(res, 400, 'errorInvalidPayload', 'No se pudo interpretar la métrica recibida', {
+      source: 'telemetry',
+      stale: false,
+      lang: DEFAULT_LANG,
+    });
+    return;
+  }
+
+  try {
+    for (const event of sanitized) {
+      // eslint-disable-next-line no-await-in-loop
+      await recordWebVitalEventFn(event);
+    }
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error(`[telemetry] failed to persist web vital event: ${err.message}`);
+    }
+    fail(res, 500, 'errorTelemetryStorage', 'No se pudo registrar la métrica de rendimiento', {
       source: 'telemetry',
       stale: true,
       lang: DEFAULT_LANG,
@@ -4332,6 +4849,11 @@ async function handleApiRequest(req, res) {
     return;
   }
 
+  if (method === 'POST' && pathname === '/telemetry/web-vital') {
+    await handleTelemetryWebVital(req, res);
+    return;
+  }
+
   if (pathname === '/admin/dashboard') {
     if (method !== 'GET') {
       fail(
@@ -4643,6 +5165,26 @@ module.exports.__setCollectJsErrorMetrics = (fn) => {
 
 module.exports.__resetCollectJsErrorMetrics = () => {
   collectJsErrorMetricsFn = defaultCollectJsErrorMetrics;
+};
+
+module.exports.__setWebVitalRecorder = (fn) => {
+  if (typeof fn === 'function') {
+    recordWebVitalEventFn = fn;
+  }
+};
+
+module.exports.__resetWebVitalRecorder = () => {
+  recordWebVitalEventFn = defaultRecordWebVitalEvent;
+};
+
+module.exports.__setCollectWebVitalMetrics = (fn) => {
+  if (typeof fn === 'function') {
+    collectWebVitalMetricsFn = fn;
+  }
+};
+
+module.exports.__resetCollectWebVitalMetrics = () => {
+  collectWebVitalMetricsFn = defaultCollectWebVitalMetrics;
 };
 
 module.exports.__setCanaryAssignmentsFetcher = (fn) => {

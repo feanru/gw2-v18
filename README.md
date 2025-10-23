@@ -56,6 +56,7 @@ Los archivos HTML referencian recursos almacenados en directorios versionados (`
 2. **Confirmar cabeceras en caché y API.** Repite la llamada anterior con `-H 'Accept-Language: en'` y valida que el proxy mantiene `Cache-Control` y `Content-Type` sin degradar a `text/html`. Esto previene que el fallback SPA se active en producción.
 3. **Supervisar `window.__bundleFallbacks__`.** Con la aplicación cargada en el navegador (entorno de pruebas), abre la consola y ejecuta `window.__bundleFallbacks__`. Tras un despliegue limpio el arreglo debe estar vacío o contener únicamente entradas antiguas; si aparecen IDs nuevos significa que el frontend tuvo que recurrir al PHP.
 4. **Vigilar avisos de `requestManager`.** En la misma sesión de DevTools, filtra los logs por `[requestManager]`. Cualquier mensaje nuevo sobre `unexpected content-type` o `official API fallback` indica que la API moderna está devolviendo HTML o errores y debe corregirse antes de cerrar el release.
+5. **Revisar las métricas de impacto.** Ejecuta `node scripts/generate-impact-report.mjs` y contrasta los resultados con los umbrales descritos en [`docs/observability/impact-metrics.md`](docs/observability/impact-metrics.md). Si aumentan los errores o los Core Web Vitals empeoran, detén el despliegue hasta investigar la causa.
 
 ### Política de caché
 
