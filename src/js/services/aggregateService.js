@@ -1,8 +1,9 @@
 import fetchWithRetry from '../utils/fetchWithRetry.js';
 import { normalizeApiResponse } from '../utils/apiResponse.js';
 import { toUiModel as toAggregateUiModel } from '../adapters/aggregateAdapter.js';
+import { prepareLangRequest, getActiveLanguage } from './langContext.js';
 
-const STORAGE_PREFIX = 'aggregate:item:';
+const STORAGE_PREFIX = 'aggregate:item';
 const memorySession = new Map();
 
 function getSessionStorageSafe() {
@@ -51,12 +52,13 @@ function writeStore(key, value) {
   }
 }
 
-function buildCacheKey(itemId) {
-  return `${STORAGE_PREFIX}${itemId}`;
+function buildCacheKey(itemId, lang) {
+  const normalizedLang = typeof lang === 'string' && lang ? lang : getActiveLanguage();
+  return `${STORAGE_PREFIX}:${normalizedLang}:${itemId}`;
 }
 
-function readCache(itemId) {
-  const raw = readStore(buildCacheKey(itemId));
+function readCache(itemId, lang) {
+  const raw = readStore(buildCacheKey(itemId, lang));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -75,14 +77,14 @@ function readCache(itemId) {
   }
 }
 
-function writeCache(itemId, { etag = null, lastModified = null, data = null, meta = null } = {}) {
+function writeCache(itemId, lang, { etag = null, lastModified = null, data = null, meta = null } = {}) {
   const record = {
     etag: etag || null,
     lastModified: lastModified || null,
     data: data ?? null,
     meta: meta ?? null,
   };
-  writeStore(buildCacheKey(itemId), JSON.stringify(record));
+  writeStore(buildCacheKey(itemId, lang), JSON.stringify(record));
 }
 
 function getHeader(response, name) {
@@ -110,7 +112,8 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
     throw new Error('ID de ítem inválido');
   }
   const id = Number(itemId);
-  const cached = readCache(id);
+  const lang = getActiveLanguage();
+  const cached = readCache(id, lang);
   const headers = {};
   if (cached?.etag) {
     headers['If-None-Match'] = cached.etag;
@@ -119,16 +122,21 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
     headers['If-Modified-Since'] = cached.lastModified;
   }
 
-  const response = await fetchWithRetry(`/api/items/${id}/aggregate`, {
-    signal,
-    headers,
-  });
+  const { url: requestUrl, options: requestOptions, lang: requestLang } = prepareLangRequest(
+    `/api/items/${id}/aggregate`,
+    {
+      signal,
+      headers,
+    },
+  );
+
+  const response = await fetchWithRetry(requestUrl, requestOptions);
   const etag = getHeader(response, 'ETag');
   const lastModified = getHeader(response, 'Last-Modified');
 
   if (response.status === 304) {
     if (cached?.data) {
-      writeCache(id, {
+      writeCache(id, requestLang, {
         etag: etag || cached.etag || null,
         lastModified: lastModified || cached.lastModified || null,
         data: cached.data,
@@ -153,7 +161,7 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
   const raw = await response.json().catch(() => null);
   const { data, meta } = normalizeApiResponse(raw);
   const model = toAggregateUiModel({ data, meta });
-  writeCache(id, { etag, lastModified, data, meta });
+  writeCache(id, requestLang, { etag, lastModified, data, meta });
   return { data, meta, model, status: response.status, fromCache: false };
 }
 
@@ -164,7 +172,7 @@ export function __clearAggregateItemCacheForTests() {
     const keys = [];
     for (let index = 0; index < storage.length; index += 1) {
       const key = storage.key(index);
-      if (typeof key === 'string' && key.startsWith(STORAGE_PREFIX)) {
+      if (typeof key === 'string' && key.startsWith(`${STORAGE_PREFIX}:`)) {
         keys.push(key);
       }
     }

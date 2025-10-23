@@ -14,6 +14,7 @@ const VERSIONED_DIST_REGEX = /^\d+\.\d+\.\d+$/;
 const WORKER_PATH_REGEX = /^\/dist\/\d+\.\d+\.\d+\/js\/workers\//;
 
 const cacheMetrics = { hit: 0, miss: 0, stale: 0, lastUpdated: 0 };
+let activeClientLang = null;
 
 async function broadcastCacheMetrics() {
   try {
@@ -137,6 +138,11 @@ self.addEventListener('message', (event) => {
     event.waitUntil(invalidateMany(data));
   } else if (data.type === 'invalidateAll') {
     event.waitUntil(caches.delete(API_CACHE));
+  } else if (data.type === 'setLang' && typeof data.lang === 'string') {
+    const normalized = data.lang.trim().toLowerCase();
+    if (normalized) {
+      activeClientLang = normalized;
+    }
   }
 });
 
