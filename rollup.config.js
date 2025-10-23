@@ -1,3 +1,5 @@
+import { nodeResolve } from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
 import terser from '@rollup/plugin-terser';
 import { readdirSync, mkdirSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,7 +51,7 @@ const nextVersion = getNextVersion();
 const versionDir = join('dist', nextVersion, 'js');
 const standaloneChunks = new Set(['src/js/utils/recipeUtils.js']);
 const configChunkName = 'config';
-const stableManualChunkNames = new Set(['services', 'utils', configChunkName]);
+const stableManualChunkNames = new Set(['services', 'utils', 'web-vitals', configChunkName]);
 const fallbackRecipeServicePath = join('src', 'js', 'services', 'recipeService.min.js');
 const recipeServiceStandaloneInput = join('src', 'js', 'services', 'recipeService.standalone.js');
 const recipeServiceStandaloneFileName = 'recipeService.standalone.min.js';
@@ -101,6 +103,11 @@ const mainConfig = {
   },
   external: ['./tabs.min.js', './services/recipeService.min.js'],
   plugins: [
+    nodeResolve({
+      browser: true,
+      preferBuiltins: false
+    }),
+    commonjs(),
     {
       name: 'copy-recipe-service-fallback',
       generateBundle() {
@@ -164,6 +171,10 @@ const mainConfig = {
         return configChunkName;
       }
 
+      if (id.includes('node_modules/web-vitals')) {
+        return 'web-vitals';
+      }
+
       if (id.includes('src/js/utils')) {
         return 'utils';
       }
@@ -176,7 +187,7 @@ const mainConfig = {
 
 const standaloneConfig = {
   input: recipeServiceStandaloneInput,
-  plugins: [terser()],
+  plugins: [nodeResolve({ browser: true, preferBuiltins: false }), commonjs(), terser()],
   output: {
     file: join(versionDir, recipeServiceStandaloneFileName),
     format: 'iife',
