@@ -47,7 +47,33 @@ async function withAggregateOverrides(overrides, fn) {
 
 async function run() {
   api.__setRecordAggregateMetric(async () => {});
-  api.__setCanaryAssignmentsFetcher(async () => ({ list: [], map: {}, raw: null }));
+  const canaryAssignments = {
+    list: [
+      {
+        scope: 'aggregate',
+        bucket: 'beta',
+        assignedAt: '2024-01-01T00:00:00.000Z',
+        expiresAt: '2024-02-01T00:00:00.000Z',
+        source: 'redis',
+        feature: 'test-feature',
+        screen: 'aggregate',
+      },
+    ],
+    map: {},
+    raw: null,
+  };
+  const expectedAssignments = [
+    {
+      scope: 'aggregate',
+      bucket: 'beta',
+      assignedAt: '2024-01-01T00:00:00.000Z',
+      expiresAt: '2024-02-01T00:00:00.000Z',
+      source: 'redis',
+      feature: 'test-feature',
+      screen: 'aggregate',
+    },
+  ];
+  api.__setCanaryAssignmentsFetcher(async () => canaryAssignments);
   api.__setRedisClient({ isOpen: true });
   try {
     const snapshotAt = '2024-01-01T12:00:00.000Z';
@@ -101,7 +127,12 @@ async function run() {
           'no-store, no-cache, must-revalidate',
         );
         const payloadFresh = JSON.parse(responseFresh.body);
+        assert.strictEqual(
+          responseFresh.headers['X-Canary-Assignments'],
+          JSON.stringify(expectedAssignments),
+        );
         assert.strictEqual(payloadFresh.meta.snapshotAt, snapshotAt);
+        assert.deepStrictEqual(payloadFresh.meta.canaryAssignments, expectedAssignments);
         const etag = responseFresh.headers.ETag;
         const lastModified = responseFresh.headers['Last-Modified'];
 
@@ -115,6 +146,10 @@ async function run() {
         assert.strictEqual(responseIfNoneMatch.statusCode, 304);
         assert.strictEqual(responseIfNoneMatch.headers.ETag, etag);
         assert.strictEqual(responseIfNoneMatch.headers['Last-Modified'], lastModified);
+        assert.strictEqual(
+          responseIfNoneMatch.headers['X-Canary-Assignments'],
+          JSON.stringify(expectedAssignments),
+        );
         assert.strictEqual(
           responseIfNoneMatch.headers['Cache-Control'],
           'no-store, no-cache, must-revalidate',
@@ -133,6 +168,10 @@ async function run() {
         assert.strictEqual(
           responseIfModifiedSince.headers['Last-Modified'],
           lastModified,
+        );
+        assert.strictEqual(
+          responseIfModifiedSince.headers['X-Canary-Assignments'],
+          JSON.stringify(expectedAssignments),
         );
         assert.strictEqual(
           responseIfModifiedSince.headers['Cache-Control'],

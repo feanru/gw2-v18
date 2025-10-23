@@ -834,23 +834,62 @@ function computeConditionalHeaders(meta, itemId, lang, options = {}) {
   return { headers, snapshotIso: null, snapshotId: null, ttlMs: null };
 }
 
+function normalizeCanaryAssignments(assignments) {
+  if (!assignments || !Array.isArray(assignments.list) || assignments.list.length === 0) {
+    return null;
+  }
+  const normalized = assignments.list
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      return {
+        scope: entry.scope,
+        bucket: entry.bucket,
+        assignedAt: entry.assignedAt ?? null,
+        expiresAt: entry.expiresAt ?? null,
+        source: entry.source ?? null,
+        feature: entry.feature ?? null,
+        screen: entry.screen ?? null,
+      };
+    })
+    .filter(Boolean);
+
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return normalized;
+}
+
 function attachCanaryAssignmentsMeta(meta, assignments) {
   if (!meta || typeof meta !== 'object') {
     return meta;
   }
-  if (!assignments || !Array.isArray(assignments.list) || assignments.list.length === 0) {
+  const normalized = normalizeCanaryAssignments(assignments);
+  if (!normalized) {
     return meta;
   }
-  meta.canaryAssignments = assignments.list.map((entry) => ({
-    scope: entry.scope,
-    bucket: entry.bucket,
-    assignedAt: entry.assignedAt ?? null,
-    expiresAt: entry.expiresAt ?? null,
-    source: entry.source ?? null,
-    feature: entry.feature ?? null,
-    screen: entry.screen ?? null,
-  }));
+  meta.canaryAssignments = normalized;
   return meta;
+}
+
+function attachCanaryAssignmentsHeader(headers, assignments) {
+  if (!headers || typeof headers !== 'object') {
+    return headers;
+  }
+  const normalized = normalizeCanaryAssignments(assignments);
+  if (!normalized) {
+    return headers;
+  }
+  try {
+    headers['X-Canary-Assignments'] = JSON.stringify(normalized);
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[api] failed to serialize canary assignments header', err);
+    }
+  }
+  return headers;
 }
 
 async function collectCanaryAssignments() {
@@ -3731,6 +3770,8 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
       }
       const filteredData = aggregateHelpers.filterAggregateData(cached.data, fields);
       const hasData = Object.keys(filteredData || {}).length > 0;
+      attachCanaryAssignmentsHeader(headers, canaryAssignments);
+
       if (
         shouldSendNotModified(req, headers, snapshotIso, {
           stale,
@@ -3789,6 +3830,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
         cache: null,
         stale: false,
       });
+      attachCanaryAssignmentsHeader(headers, canaryAssignments);
       if (!snapshotIdForMetrics) {
         snapshotIdForMetrics = snapshotId || resolveSnapshotId(meta);
       }
@@ -3846,6 +3888,7 @@ async function handleGetAggregate(req, res, itemId, lang, url) {
         cache: cacheMetadata,
         stale: true,
       });
+      attachCanaryAssignmentsHeader(headers, canaryAssignments);
       cacheStale = true;
       if (!snapshotIdForMetrics) {
         snapshotIdForMetrics = snapshotId || resolveSnapshotId(meta);
