@@ -93,6 +93,7 @@ Previo al despliegue:
 - [ ] Confirmar ventana y responsables en `#deploys`.
 - [ ] Validar estado verde en CI/CD y dashboard de salud (Mongo/Redis OK).
 - [ ] Avisar a soporte sobre la ventana y canal de updates.
+- [ ] Revisar `docs/observability/impact-metrics.md` y dejar constancia de que los umbrales de impacto siguen siendo válidos.
 - [ ] Preparar mensaje de rollback (en caso de fallo).
 
 Durante el despliegue:
