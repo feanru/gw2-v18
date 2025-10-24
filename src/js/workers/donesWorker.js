@@ -126,7 +126,13 @@ async function adaptNode(node, parentId = null) {
 const ctx = typeof self !== 'undefined' ? self : globalThis;
 
 ctx.onmessage = async (e) => {
-  const { rootIngredients = [], skipEntries, preloadedItems: itemsPayload, preloadedPrices: pricesPayload } = e.data || {};
+  const {
+    rootIngredients = [],
+    skipEntries,
+    preloadedItems: itemsPayload,
+    preloadedPrices: pricesPayload,
+    preloadContext,
+  } = e.data || {};
   if (Array.isArray(skipEntries)) {
     syncNonMarketEntries(skipEntries);
   }
@@ -135,6 +141,9 @@ ctx.onmessage = async (e) => {
   }
   if (pricesPayload) {
     syncPreloadedPrices(pricesPayload);
+  }
+  if (preloadContext) {
+    ctx.__donesLastPreloadContext__ = preloadContext;
   }
   const ingredientTree = await Promise.all(rootIngredients.map(r => adaptNode(r, null)));
   ctx.postMessage({ ingredientTree });
