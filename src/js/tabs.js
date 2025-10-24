@@ -5,7 +5,9 @@ function initTabs() {
   const buttons = document.querySelectorAll('.tab-button[data-tab]');
   const contents = document.querySelectorAll('.tab-content');
 
-  function activate(tabId) {
+  let activeTabId = null;
+
+  const applyState = (tabId) => {
     buttons.forEach(btn => {
       const isActive = btn.getAttribute('data-tab') === tabId;
       btn.classList.toggle('active', isActive);
@@ -15,7 +17,24 @@ function initTabs() {
       content.classList.toggle('active', isActive);
       content.style.display = isActive ? '' : 'none';
     });
-    document.dispatchEvent(new CustomEvent('tabchange', { detail: { tabId } }));
+  };
+
+  function activate(tabId, options = {}) {
+    if (!tabId) return;
+
+    const { emit = true, force = false, userInitiated = false, emitOnUnchanged = false } = options;
+    const changed = activeTabId !== tabId;
+
+    if (!changed && !force) {
+      return;
+    }
+
+    activeTabId = tabId;
+    applyState(tabId);
+
+    if (emit && (changed || emitOnUnchanged)) {
+      document.dispatchEvent(new CustomEvent('tabchange', { detail: { tabId, userInitiated } }));
+    }
   }
 
   // Initialize: hide non-active contents
@@ -27,14 +46,19 @@ function initTabs() {
       content.style.display = 'none';
     }
   });
+
+  if (!initial && buttons.length) {
+    initial = buttons[0].getAttribute('data-tab');
+  }
+
   if (initial) {
-    activate(initial);
+    activate(initial, { emit: false, force: true });
   }
 
   buttons.forEach(btn => {
     btn.addEventListener('click', () => {
       const tabId = btn.getAttribute('data-tab');
-      activate(tabId);
+      activate(tabId, { userInitiated: true });
     });
   });
 }
