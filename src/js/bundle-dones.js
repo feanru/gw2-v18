@@ -208,9 +208,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   await import('./tabs.min.js');
 
-  let initialTabId = getActiveTabId();
-  if (initialTabId) {
-    await loadTab(initialTabId);
+  let currentTabId = getActiveTabId();
+  if (currentTabId) {
+    await loadTab(currentTabId);
   } else if (buttons.length) {
     const fallbackTabId = buttons[0].getAttribute('data-tab');
     await loadTab(fallbackTabId);
