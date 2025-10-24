@@ -114,21 +114,21 @@ export async function fetchItemAggregate(itemId, { signal } = {}) {
   const id = Number(itemId);
   const lang = getActiveLanguage();
   const cached = readCache(id, lang);
-  const headers = {};
+  const { url: requestUrl, options: baseOptions, lang: requestLang } = prepareLangRequest(
+    `/api/items/${id}/aggregate`,
+    { signal },
+  );
+  const headerEntries =
+    typeof Headers !== 'undefined' && baseOptions?.headers instanceof Headers
+      ? Object.fromEntries(baseOptions.headers.entries())
+      : { ...(baseOptions?.headers || {}) };
   if (cached?.etag) {
-    headers['If-None-Match'] = cached.etag;
+    headerEntries['If-None-Match'] = cached.etag;
   }
   if (cached?.lastModified) {
-    headers['If-Modified-Since'] = cached.lastModified;
+    headerEntries['If-Modified-Since'] = cached.lastModified;
   }
-
-  const { url: requestUrl, options: requestOptions, lang: requestLang } = prepareLangRequest(
-    `/api/items/${id}/aggregate`,
-    {
-      signal,
-      headers,
-    },
-  );
+  const requestOptions = { ...baseOptions, headers: headerEntries };
 
   const response = await fetchWithRetry(requestUrl, requestOptions);
   const etag = getHeader(response, 'ETag');
