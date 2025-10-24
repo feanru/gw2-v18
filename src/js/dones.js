@@ -231,6 +231,24 @@ const sharedPreloadState = {
   contextKey: null,
 };
 
+function shouldUseLegendaryData(contextInput = null) {
+  let contexts = null;
+  if (contextInput instanceof Set) {
+    contexts = contextInput;
+  } else if (contextInput != null) {
+    contexts = normalizePreloadContext(contextInput);
+  } else if (sharedPreloadState.loadedContexts instanceof Set) {
+    contexts = sharedPreloadState.loadedContexts;
+  }
+  if (!(contexts instanceof Set) || contexts.size === 0) {
+    return false;
+  }
+  if (contexts.has(PRELOAD_CONTEXTS.ALL)) {
+    return true;
+  }
+  return contexts.has(PRELOAD_CONTEXTS.LEGENDARY);
+}
+
 let legendaryLookupMap = null;
 
 function recordDonesAggregateFallback(reason, meta = null, error = null, extra = {}) {
@@ -369,11 +387,11 @@ function collectLegendaryGiftIds(targetSet) {
   processCollection(legendaryData.LEGENDARY_ITEMS);
 }
 
-function normalizeItemForCache(id, item = null) {
+function normalizeItemForCache(id, item = null, contextInput = null) {
   const numericId = Number(id);
   if (!Number.isFinite(numericId)) return null;
-  const legendary = getLegendaryNodeById(numericId);
-  const fallbackName = item?.name ?? item?.localized_name ?? item?.display_name ?? null;
+  const legendary = shouldUseLegendaryData(contextInput) ? getLegendaryNodeById(numericId) : null;
+  const fallbackName = item?.name ?? item?.localized_name ?? item?.display_name ?? item?.description ?? null;
   const fallbackIcon = item?.icon ?? null;
   const normalized = {
     id: numericId,
@@ -411,13 +429,15 @@ function getPreloadedItemData(id) {
   }
   const cachedItem = getCached(`item_${numericId}`);
   if (cachedItem) {
-    const normalized = normalizeItemForCache(numericId, cachedItem);
+    const contexts = sharedPreloadState.loadedContexts instanceof Set ? sharedPreloadState.loadedContexts : null;
+    const normalized = normalizeItemForCache(numericId, cachedItem, contexts);
     if (normalized && payload?.items instanceof Map) {
       payload.items.set(numericId, normalized);
     }
     return normalized;
   }
-  const legendary = normalizeItemForCache(numericId, null);
+  const contexts = sharedPreloadState.loadedContexts instanceof Set ? sharedPreloadState.loadedContexts : null;
+  const legendary = normalizeItemForCache(numericId, null, contexts);
   if (legendary && payload?.items instanceof Map) {
     payload.items.set(numericId, legendary);
   }
@@ -438,7 +458,7 @@ function getPreloadedPriceData(id) {
   return null;
 }
 
-function buildManualIngredientDisplay(ingredient) {
+function buildManualIngredientDisplay(ingredient, context = null) {
   if (!ingredient) {
     return {
       id: null,
@@ -455,7 +475,7 @@ function buildManualIngredientDisplay(ingredient) {
   const name = itemInfo?.name || ingredient.name || '';
   const type = itemInfo?.type || ingredient.type;
   const icon = itemInfo?.icon || '';
-  const marketStatus = resolveMarketStatus(ingredient.id, name, type);
+  const marketStatus = resolveMarketStatus(ingredient.id, name, type, context);
   const priceInfo = marketStatus.skip ? null : getPreloadedPriceData(numericId);
   return {
     id: ingredient.id,
@@ -466,6 +486,29 @@ function buildManualIngredientDisplay(ingredient) {
     priceSell: marketStatus.skip ? null : priceInfo?.sell_price ?? null,
     marketStatus,
   };
+}
+
+function recordPreloadEvent(type, contextSet, detail = {}) {
+  try {
+    if (typeof window === 'undefined') return;
+    if (!Array.isArray(window.__donesPreloadLog__)) {
+      window.__donesPreloadLog__ = [];
+    }
+    const normalizedContext = contextSet instanceof Set ? contextSet : normalizePreloadContext(contextSet);
+    const entry = {
+      type,
+      context: getPreloadContextKey(normalizedContext),
+      timestamp: new Date().toISOString(),
+      legendary: shouldUseLegendaryData(normalizedContext),
+      ...detail,
+    };
+    window.__donesPreloadLog__.push(entry);
+    if (window.__donesPreloadLog__.length > 100) {
+      window.__donesPreloadLog__.shift();
+    }
+  } catch (err) {
+    console.warn('No se pudo registrar el evento de precarga de dones', err);
+  }
 }
 
 async function ensurePreloadedIngredientData(extraNodes = [], context = PRELOAD_CONTEXTS.ALL) {
@@ -524,6 +567,13 @@ async function ensurePreloadedIngredientData(extraNodes = [], context = PRELOAD_
     } catch (telemetryError) {
       console.warn('No se pudo registrar telemetría de reutilización de preloads', telemetryError);
     }
+    recordPreloadEvent('reuse', contextSet, {
+      items: itemsMap?.size ?? 0,
+      prices: pricesMap?.size ?? 0,
+      extraIds: Array.from(extraIds),
+      missingExtraIds: Array.from(missingExtraIds),
+      ttlExpired,
+    });
     return payload;
   }
 
@@ -616,7 +666,7 @@ async function ensurePreloadedIngredientData(extraNodes = [], context = PRELOAD_
       console.warn('Advertencias del agregado de dones', aggregateState.warnings);
     }
 
-    const nonMarketMap = getNonMarketMap();
+    const nonMarketMap = getNonMarketMap(contextSet);
     const idsNeedingLegacy = new Set();
     let fallbackReason = aggregateEnabled ? null : 'flag-disabled';
 
@@ -776,14 +826,14 @@ async function ensurePreloadedIngredientData(extraNodes = [], context = PRELOAD_
       if (!Number.isFinite(id)) return;
       const bundle = bundleMap.get(id) || null;
       const baseItem = bundle?.item || null;
-      const normalizedItem = normalizeItemForCache(id, baseItem);
+      const normalizedItem = normalizeItemForCache(id, baseItem, contextSet);
       if (normalizedItem) {
         itemsMap.set(id, normalizedItem);
         setCached(`item_${id}`, normalizedItem, ITEM_CACHE_TTL);
       } else {
         const cachedItem = getCached(`item_${id}`);
         if (cachedItem) {
-          const normalizedCached = normalizeItemForCache(id, cachedItem);
+          const normalizedCached = normalizeItemForCache(id, cachedItem, contextSet);
           if (normalizedCached) {
             itemsMap.set(id, normalizedCached);
           }
@@ -818,7 +868,7 @@ async function ensurePreloadedIngredientData(extraNodes = [], context = PRELOAD_
       const id = Number(rawId);
       if (!Number.isFinite(id)) return;
       if (!itemsMap.has(id)) {
-        const legendary = normalizeItemForCache(id, null);
+        const legendary = normalizeItemForCache(id, null, contextSet);
         if (legendary) {
           itemsMap.set(id, legendary);
         }
@@ -858,6 +908,14 @@ async function ensurePreloadedIngredientData(extraNodes = [], context = PRELOAD_
     } catch (telemetryError) {
       console.warn('No se pudo registrar telemetría de precarga de dones', telemetryError);
     }
+    recordPreloadEvent('fetch', contextSet, {
+      ids: idsArray,
+      extraIds: Array.from(extraIds),
+      missingExtraIds: Array.from(missingExtraIds),
+      aggregateUsed: aggregateState.used,
+      aggregateFromCache: aggregateState.fromCache,
+      fallback: legacyIds,
+    });
     return sharedPreloadState.payload;
   })()
     .catch((err) => {
@@ -907,19 +965,19 @@ function ensureLegendaryGiftIds(targetMap) {
   return true;
 }
 
-function getNonMarketMap() {
+function getNonMarketMap(contextInput = null) {
   if (!cachedNonMarketMap) {
     cachedNonMarketMap = new Map(BASE_NON_MARKET_ITEMS);
   }
-  if (!legendaryDataProcessed) {
+  if (!legendaryDataProcessed && shouldUseLegendaryData(contextInput)) {
     legendaryDataProcessed = ensureLegendaryGiftIds(cachedNonMarketMap);
   }
   return cachedNonMarketMap;
 }
 
-function resolveMarketStatus(id, name, type) {
+function resolveMarketStatus(id, name, type, context = null) {
   const numericId = Number(id);
-  const map = getNonMarketMap();
+  const map = getNonMarketMap(context);
 
   if (!Number.isFinite(numericId)) {
     return { skip: true, reason: 'synthetic', label: NO_MARKET_LABEL };
@@ -948,8 +1006,8 @@ function resolveMarketStatus(id, name, type) {
   return { skip: false, reason: null, label: null };
 }
 
-function getNonMarketEntriesForWorker() {
-  return Array.from(getNonMarketMap().entries());
+function getNonMarketEntriesForWorker(contextInput = null) {
+  return Array.from(getNonMarketMap(contextInput).entries());
 }
 let donesWorkerInstance = null;
 
@@ -986,7 +1044,7 @@ async function runDonesWorker(rootIngredients, context = PRELOAD_CONTEXTS.ALL) {
   }
   const payload = {
     rootIngredients,
-    skipEntries: getNonMarketEntriesForWorker(),
+    skipEntries: getNonMarketEntriesForWorker(context),
     preloadedItems: mapToPlainObject(preload?.items),
     preloadedPrices: mapToPlainObject(preload?.prices),
     // Se incluye para telemetría y depuración en el worker.
@@ -1022,9 +1080,9 @@ async function buildWorkerTree(ings, context = PRELOAD_CONTEXTS.ALL) {
   return { tree: updatedTree, totals };
 }
 
-function renderNodeHtml(node, level = 0) {
+function renderNodeHtml(node, level = 0, context = null) {
   const indent = level > 0 ? `padding-left:${level * 32}px;` : '';
-  const status = resolveMarketStatus(node.id, node.name, node.type);
+  const status = resolveMarketStatus(node.id, node.name, node.type, context);
   const shouldShowNoMarket = status.skip;
   const noMarketLabel = status.label || NO_MARKET_LABEL;
 
@@ -1065,7 +1123,7 @@ function renderNodeHtml(node, level = 0) {
   let childContributedValue = false;
   if (Array.isArray(node.children)) {
     for (const child of node.children) {
-      const childResult = renderNodeHtml(child, level + 1);
+      const childResult = renderNodeHtml(child, level + 1, context);
       rowHtml += childResult.html;
       if (childResult.hasValue) {
         childContributedValue = true;
@@ -1515,7 +1573,7 @@ async function renderTributoDraconico(context = PRELOAD_CONTEXTS.DRACONIC) {
         subdonDiv.appendChild(subdonTitle);
         // Obtener datos de ingredientes
         await ensurePreloadedIngredientData(subdon.ingredients, context);
-        const ingredientes = subdon.ingredients.map((ing) => buildManualIngredientDisplay(ing));
+        const ingredientes = subdon.ingredients.map((ing) => buildManualIngredientDisplay(ing, context));
         // Renderizar tabla con lógica tradicional
         let totalBuy = 0;
         let totalSell = 0;
@@ -1844,7 +1902,7 @@ async function renderIngredientRowWithComponents(ing, level = 0, context = PRELO
     node.total_buy = buyPrice * count;
     node.total_sell = sellPrice * count;
   }
-  const { html, hasNoMarket, hasValue } = renderNodeHtml(node, level);
+  const { html, hasNoMarket, hasValue } = renderNodeHtml(node, level, context);
   const totalBuy = Number.isFinite(node.total_buy) ? node.total_buy : null;
   const totalSell = Number.isFinite(node.total_sell) ? node.total_sell : null;
   return { html, totalBuy, totalSell, hasNoMarket, hasValue };
