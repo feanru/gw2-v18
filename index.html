@@ -131,7 +131,7 @@
 
         function loadUtils() {
           if (!utilsPromise) {
-            utilsPromise = import('/dist/0.14.94/js/bundle-utils-1.min.js');
+            utilsPromise = import('/dist/0.0.2/js/bundle-utils-1.min.js');
           }
           return utilsPromise;
         }
@@ -139,7 +139,7 @@
         openBtn.addEventListener('click', async function(e) {
           e.preventDefault();
           await loadUtils();
-          openSearchModal('/dist/0.14.94/js/search-modal.min.js');
+          openSearchModal('/dist/0.0.2/js/search-modal.min.js');
         });
         const safeClose = async (...args) => {
           await loadUtils();
@@ -313,7 +313,7 @@
   <script type="module">
     window.addEventListener('DOMContentLoaded', async () => {
       try {
-        await import('/dist/0.14.94/js/bundle-auth-nav.min.js');
+        await import('/dist/0.0.2/js/bundle-auth-nav.min.js');
         window.Auth?.initAuth?.();
       } catch (e) {
         console.error('Error loading auth module', e);
@@ -336,7 +336,7 @@
   <script type="module">
     window.addEventListener('DOMContentLoaded', async () => {
       try {
-        await import('/dist/0.14.94/js/sw-register.min.js');
+        await import('/dist/0.0.2/js/sw-register.min.js');
       } catch (e) {
         console.error('SW registration failed', e);
       }
