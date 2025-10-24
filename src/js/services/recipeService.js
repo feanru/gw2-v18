@@ -17,6 +17,10 @@ function buildBundleCacheKey(id, lang) {
     return `bundle_${normalizedLang}_${id}`;
 }
 
+function buildBundleGlobalKey(id) {
+    return `bundle_${id}`;
+}
+
 function buildRecipeCacheKey(id, lang) {
     const normalizedLang = typeof lang === 'string' && lang ? lang : getActiveLanguage();
     return `recipe_${normalizedLang}_${id}`;
@@ -69,6 +73,7 @@ function applyBundleEntries(payload, results, lang) {
         entries.forEach(entry => {
             const entryKey = String(entry.id);
             const bundleCacheKey = buildBundleCacheKey(entryKey, lang);
+            const bundleGlobalKey = buildBundleGlobalKey(entryKey);
             const adapters = {
                 recipe: toRecipeUiModel({ data: entry?.recipe ?? null }),
                 prices: priceEntryToSummary(entry?.market ?? null)
@@ -76,6 +81,7 @@ function applyBundleEntries(payload, results, lang) {
             const normalizedEntry = { ...entry, adapters };
             results.set(entryKey, normalizedEntry);
             setCached(bundleCacheKey, normalizedEntry, undefined, { lang });
+            setCached(bundleGlobalKey, normalizedEntry, undefined, { lang });
             if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
                 window.dispatchEvent(new CustomEvent('bundleItemRefreshed', { detail: normalizedEntry }));
             }
@@ -98,7 +104,17 @@ export async function getItemBundles(ids = []) {
 
     ids.forEach(id => {
         const key = String(id);
-        const cached = getCached(buildBundleCacheKey(key, lang));
+        const primaryKey = buildBundleCacheKey(key, lang);
+        let cached = getCached(primaryKey);
+        if (!cached) {
+            const fallbackEntry = getCached(buildBundleGlobalKey(key), true);
+            if (fallbackEntry && (!fallbackEntry.lang || fallbackEntry.lang === lang)) {
+                cached = fallbackEntry.value;
+                if (cached) {
+                    setCached(primaryKey, cached, undefined, { lang });
+                }
+            }
+        }
         if (cached) {
             results.set(key, cached);
         } else {
