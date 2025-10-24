@@ -72,32 +72,22 @@ document.addEventListener('DOMContentLoaded', async function() {
   const buttons = Array.from(document.querySelectorAll('.tab-button[data-tab]'));
   const contents = Array.from(document.querySelectorAll('.tab-content'));
 
-  const DEFAULT_TAB_ID = 'tab-don-suerte';
-  const defaultButton = buttons.find(btn => btn.getAttribute('data-tab') === DEFAULT_TAB_ID);
-  const defaultContent = document.getElementById(DEFAULT_TAB_ID);
-
-  if (defaultButton && defaultContent) {
-    buttons.forEach(btn => {
-      const isActive = btn === defaultButton;
-      btn.classList.toggle('active', isActive);
-    });
-    contents.forEach(content => {
-      const isActive = content === defaultContent;
-      content.classList.toggle('active', isActive);
-      content.style.display = isActive ? '' : 'none';
-    });
+  const savedTabId = localStorage.getItem('activeDonTab');
+  if (savedTabId) {
+    const savedButton = buttons.find(btn => btn.getAttribute('data-tab') === savedTabId);
+    const savedContent = document.getElementById(savedTabId);
+    if (savedButton && savedContent) {
+      buttons.forEach(btn => {
+        const isActive = btn === savedButton;
+        btn.classList.toggle('active', isActive);
+      });
+      contents.forEach(content => {
+        const isActive = content === savedContent;
+        content.classList.toggle('active', isActive);
+        content.style.display = isActive ? '' : 'none';
+      });
+    }
   }
-
-  let persistenceEnabled = false;
-  const enablePersistenceIfTrusted = (event) => {
-    if (persistenceEnabled) return;
-    if (!event || event.isTrusted === false) return;
-    persistenceEnabled = true;
-  };
-
-  buttons.forEach(btn => {
-    btn.addEventListener('click', enablePersistenceIfTrusted, true);
-  });
 
   const ensureDonesPagesReady = async (timeoutMs = 2000) => {
     if (window.DonesPages) return;
@@ -129,13 +119,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   const loadTab = async (tabId) => {
     if (!tabId) return;
 
-    if (persistenceEnabled) {
-      try {
-        localStorage.setItem('activeDonTab', tabId);
-      } catch (error) {
-        console.warn('No se pudo guardar la pestaña activa en localStorage', error);
-      }
-    }
+    localStorage.setItem('activeDonTab', tabId);
 
     if (loadedTabs.has(tabId)) return;
     if (loadingTabs.has(tabId)) {
