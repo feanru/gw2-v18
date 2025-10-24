@@ -308,7 +308,7 @@ async function testCachesUpdatedAfterModernBundleSuccess() {
   assert.equal(fetchCalls.length, 1, 'Debe llamar una vez al endpoint moderno');
   assert.equal(bundles[0]?.item?.name, 'Modern Bundle 90401');
 
-  const cached = cacheModule.getCached('bundle_90401');
+  const cached = cacheModule.getCached('bundle_es_90401');
   assert.ok(cached, 'Debe existir un cache para el bundle');
   assert.equal(cached.item?.id, 90401, 'El cache debe contener el ítem retornado');
   assert.equal(window.__bundleFallbacks__.length, 0, 'No debe registrar fallbacks en éxito');
@@ -378,7 +378,7 @@ async function testFallbackCachesAndTelemetryWhenModernFails() {
   assert.equal(fallbackRequests.length, 1, 'Debe ejecutar exactamente un fallback PHP');
   assert.equal(bundles[0]?.item?.name, 'Legacy Bundle 90402');
 
-  const cached = cacheModule.getCached('bundle_90402');
+  const cached = cacheModule.getCached('bundle_es_90402');
   assert.ok(cached, 'El fallback debe poblar el cache');
   assert.equal(cached.item?.name, 'Legacy Bundle 90402');
   assert.equal(window.__bundleFallbacks__.length, 1, 'Debe registrar el fallback');
