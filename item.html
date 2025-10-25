@@ -98,7 +98,7 @@
         </div>
       </div>
   <script src="/runtime-env.js"></script>
-  <script type="module" src="/dist/0.0.5/js/bundle-utils-1.min.js" defer></script>
+  <script type="module" src="/dist/0.0.1/js/bundle-utils-1.min.js" defer></script>
   <script>
   document.addEventListener('DOMContentLoaded', function() {
     const openBtn = document.getElementById('open-search-modal');
@@ -106,7 +106,7 @@
     const closeBtn = document.getElementById('close-search-modal');
     openBtn.addEventListener('click', function(e) {
       e.preventDefault();
-      openSearchModal('/dist/0.0.5/js/search-modal.min.js');
+      openSearchModal('/dist/0.0.1/js/search-modal.min.js');
     });
     closeBtn.addEventListener('click', closeSearchModal);
     modal.querySelector('.search-modal-backdrop').addEventListener('click', closeSearchModal);
@@ -116,7 +116,7 @@
   });
 </script>
 
-<script type="module" src="/dist/0.0.5/js/bundle-auth-nav.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/bundle-auth-nav.min.js" defer></script>
 <script>
   // Inicializar autenticación cuando el DOM esté listo
   document.addEventListener('DOMContentLoaded', function() {
@@ -126,7 +126,7 @@
   });
 </script>
 
-<script src="/dist/0.0.5/js/recipeService.standalone.min.js"></script>
+<script src="/dist/0.0.1/js/recipeService.standalone.min.js"></script>
 <script>
   if (
     typeof window !== 'undefined' &&
@@ -135,20 +135,20 @@
     console.error('Servicios de recetas no disponibles: window.RecipeService.getItemBundles no está definido.');
   }
 </script>
-<script type="module" src="/dist/0.0.5/js/services.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/services.min.js" defer></script>
 
-<script type="module" src="/dist/0.0.5/js/feedback-modal.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/tabs.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/utils/recipeUtils.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/item-mejores.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/itemHandlers.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/storageUtils.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/ui-helpers.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/item-ui.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/items-core.min.js" defer></script>
-<script type="module" src="/dist/0.0.5/js/item-loader.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/feedback-modal.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/tabs.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/utils/recipeUtils.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/item-mejores.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/itemHandlers.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/storageUtils.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/ui-helpers.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/item-ui.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/items-core.min.js" defer></script>
+<script type="module" src="/dist/0.0.1/js/item-loader.min.js" defer></script>
   
   <!-- Inicialización -->
-  <script type="module" src="/dist/0.0.5/js/sw-register.min.js"></script>
+  <script type="module" src="/dist/0.0.1/js/sw-register.min.js"></script>
 </body>
 </html>

@@ -72,54 +72,32 @@ document.addEventListener('DOMContentLoaded', async function() {
   const buttons = Array.from(document.querySelectorAll('.tab-button[data-tab]'));
   const contents = Array.from(document.querySelectorAll('.tab-content'));
 
-  const STORAGE_KEY = 'activeDonTab';
-  const SESSION_READY_KEY = 'activeDonTabSessionReady';
   const DEFAULT_TAB_ID = 'tab-don-suerte';
+  const defaultButton = buttons.find(btn => btn.getAttribute('data-tab') === DEFAULT_TAB_ID);
+  const defaultContent = document.getElementById(DEFAULT_TAB_ID);
 
-  const readStoredTab = () => {
-    try {
-      return localStorage.getItem(STORAGE_KEY);
-    } catch (e) {
-      return null;
-    }
-  };
-
-  const hasSessionPreference = () => {
-    try {
-      return sessionStorage.getItem(SESSION_READY_KEY) === '1';
-    } catch (e) {
-      return false;
-    }
-  };
-
-  const storedTabId = readStoredTab();
-  const sessionHasPreference = hasSessionPreference();
-
-  const defaultButton = buttons.find(btn => btn.getAttribute('data-tab') === DEFAULT_TAB_ID) || buttons[0];
-  let initialButton = defaultButton;
-
-  if (sessionHasPreference && storedTabId) {
-    const storedButton = buttons.find(btn => btn.getAttribute('data-tab') === storedTabId);
-    const storedContent = storedTabId ? document.getElementById(storedTabId) : null;
-    if (storedButton && storedContent) {
-      initialButton = storedButton;
-    }
-  }
-
-  const initialTabId = initialButton ? initialButton.getAttribute('data-tab') : null;
-  const initialContent = initialTabId ? document.getElementById(initialTabId) : null;
-
-  if (initialButton && initialContent) {
+  if (defaultButton && defaultContent) {
     buttons.forEach(btn => {
-      const isActive = btn === initialButton;
+      const isActive = btn === defaultButton;
       btn.classList.toggle('active', isActive);
     });
     contents.forEach(content => {
-      const isActive = content === initialContent;
+      const isActive = content === defaultContent;
       content.classList.toggle('active', isActive);
       content.style.display = isActive ? '' : 'none';
     });
   }
+
+  let persistenceEnabled = false;
+  const enablePersistenceIfTrusted = (event) => {
+    if (persistenceEnabled) return;
+    if (!event || event.isTrusted === false) return;
+    persistenceEnabled = true;
+  };
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', enablePersistenceIfTrusted, true);
+  });
 
   const ensureDonesPagesReady = async (timeoutMs = 2000) => {
     if (window.DonesPages) return;
@@ -148,22 +126,16 @@ document.addEventListener('DOMContentLoaded', async function() {
     'dones-1ra-gen': () => window.DonesPages.loadDones1Gen(),
   };
 
-  let allowPersistence = sessionHasPreference;
-
-  const persistTabSelection = (tabId) => {
-    if (!allowPersistence || !tabId) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, tabId);
-      sessionStorage.setItem(SESSION_READY_KEY, '1');
-    } catch (e) {
-      // Ignore storage errors
-    }
-  };
-
   const loadTab = async (tabId) => {
     if (!tabId) return;
 
-    persistTabSelection(tabId);
+    if (persistenceEnabled) {
+      try {
+        localStorage.setItem('activeDonTab', tabId);
+      } catch (error) {
+        console.warn('No se pudo guardar la pestaña activa en localStorage', error);
+      }
+    }
 
     if (loadedTabs.has(tabId)) return;
     if (loadingTabs.has(tabId)) {
@@ -197,10 +169,6 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   document.addEventListener('tabchange', e => {
     const tabId = e && e.detail ? e.detail.tabId : undefined;
-    const userInitiated = e && e.detail ? e.detail.userInitiated : false;
-    if (userInitiated) {
-      allowPersistence = true;
-    }
     if (tabId) {
       loadTab(tabId);
     }
@@ -208,12 +176,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
   await import('./tabs.min.js');
 
-  let currentTabId = getActiveTabId();
-  if (currentTabId) {
-    await loadTab(currentTabId);
+  let initialTabId = getActiveTabId();
+  if (initialTabId) {
+    await loadTab(initialTabId);
   } else if (buttons.length) {
-    const fallbackTabId = buttons[0].getAttribute('data-tab');
-    await loadTab(fallbackTabId);
+    buttons[0].click();
   }
 });
 })();

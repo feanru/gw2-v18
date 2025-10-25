@@ -5,9 +5,9 @@ function initTabs() {
   const buttons = document.querySelectorAll('.tab-button[data-tab]');
   const contents = document.querySelectorAll('.tab-content');
 
-  let activeTabId = null;
+  let currentTabId = null;
 
-  const applyState = (tabId) => {
+  const applyActiveState = (tabId) => {
     buttons.forEach(btn => {
       const isActive = btn.getAttribute('data-tab') === tabId;
       btn.classList.toggle('active', isActive);
@@ -19,22 +19,13 @@ function initTabs() {
     });
   };
 
-  function activate(tabId, options = {}) {
-    if (!tabId) return;
-
-    const { emit = true, force = false, userInitiated = false, emitOnUnchanged = false } = options;
-    const changed = activeTabId !== tabId;
-
-    if (!changed && !force) {
+  function activate(tabId, { force = false } = {}) {
+    if (!force && tabId === currentTabId) {
       return;
     }
-
-    activeTabId = tabId;
-    applyState(tabId);
-
-    if (emit && (changed || emitOnUnchanged)) {
-      document.dispatchEvent(new CustomEvent('tabchange', { detail: { tabId, userInitiated } }));
-    }
+    currentTabId = tabId;
+    applyActiveState(tabId);
+    document.dispatchEvent(new CustomEvent('tabchange', { detail: { tabId } }));
   }
 
   // Initialize: hide non-active contents
@@ -42,23 +33,19 @@ function initTabs() {
   contents.forEach(content => {
     if (content.classList.contains('active')) {
       initial = content.id;
+      currentTabId = content.id;
     } else {
       content.style.display = 'none';
     }
   });
-
-  if (!initial && buttons.length) {
-    initial = buttons[0].getAttribute('data-tab');
-  }
-
   if (initial) {
-    activate(initial, { emit: false, force: true });
+    applyActiveState(initial);
   }
 
   buttons.forEach(btn => {
     btn.addEventListener('click', () => {
       const tabId = btn.getAttribute('data-tab');
-      activate(tabId, { userInitiated: true });
+      activate(tabId);
     });
   });
 }
