@@ -27,7 +27,6 @@ Instala las dependencias del proyecto y ejecuta la suite con:
 npm install
 npm test
 ```
-
 El comando `npm run lint:domains` valida que el runtime y los workers no
 introduzcan dominios externos fuera de la lista permitida.
 
