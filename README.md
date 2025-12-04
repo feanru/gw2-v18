@@ -153,23 +153,7 @@ Puedes definir estas variables de dos formas:
    export OAUTH_REDIRECT_URI=https://gw2item.com/backend/oauth_callback.php
    ```
 
-2. Creando un archivo `.env` en la raíz del proyecto con las mismas claves. Este archivo se cargará automáticamente gracias a `backend/env.php`:
 
-  ```env
-  DB_HOST=localhost
-  DB_NAME=gw2db
-  DB_USER=root
-  DB_PASS=
-  GOOGLE_CLIENT_ID=<tu-id-google>
-  GOOGLE_CLIENT_SECRET=<tu-secreto-google>
-  DISCORD_CLIENT_ID=<tu-id-discord>
-  DISCORD_CLIENT_SECRET=<tu-secreto-discord>
-  OAUTH_REDIRECT_URI=https://gw2item.com/backend/oauth_callback.php
-  API_BASE_URL=https://api.guildwars2.com/v2
-  LANG=es
-  MARKET_CSV_URL=https://api.datawars2.ie/gw2/v1/items/csv
-  GW2_API_KEY=
-  ```
 
 Las variables `API_BASE_URL`, `LANG` y `MARKET_CSV_URL` permiten
 personalizar las URL de la API y el idioma por defecto. `GW2_API_KEY`
@@ -192,15 +176,6 @@ DB_USER=<usuario_db>
 DB_PASS=<password_db>
 ```
 
-Para la instancia en producci\xc3\xb3n este repositorio incluye un `.env`
-de ejemplo con los valores reales predefinidos:
-
-```env
-DB_HOST=localhost
-DB_NAME=ferna380_gw2item
-DB_USER=ferna380_ruaner
-DB_PASS=<contrase\xc3\xb1a-asignada>
-```
 
 Solo debes actualizar `DB_PASS` con la contrase\xc3\xb1a correspondiente si
 clonas el proyecto para usarlo en otro entorno. Con ello el backend quedar\xc3\xa1
